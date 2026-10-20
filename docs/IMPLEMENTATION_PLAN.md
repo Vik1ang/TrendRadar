@@ -28,7 +28,7 @@
 
 验收：真实采集数据已完成写库、API 查询及一次导入；AI 开关关闭的验收路径正确标记 `not_requested`。生产 TrendRadar 容器中发现现有 AI key、私网 OpenAI-compatible base 和模型配置；仅对其 `/models` 做了只读 GET，返回 HTTP 200/57 个 model，不读取或输出 key，不进行生成调用。逐篇真实模型输出、相同文章重采集去重和失败重试仍未执行；生成调用可能消耗现有额度/计费，待确认授权。
 
-状态（2026-10-20）：`trendradar/intelligence/` adapter 和提示词已实现；复用现有 NewsNow/RSS 数据结构及 LiteLLM `AIClient`；新增 URL 规范化与稳定 UUID、历史首次采集时间保留、文章级结构化 JSON 校验、先存文章后分析、按模型/Prompt 版本请求候选文章、失败记录/重试窗口。新增 SQLite 受控补导命令 `python -m trendradar.intelligence.backfill --days N`（范围 1–90，默认跳过 AI；显式 `--analyze` 才调用模型），PostgreSQL 恢复后可用原始 SQLite 记录补入；通过隔离 PostgreSQL + 实际 TrendRadar LocalStorageBackend SQLite 的 Docker 网络端到端验证，补导结果 inserted=1，Fastify 查回 1 条 `not_requested` 新闻。真实 NewsNow 采集 30 条并写入临时 PostgreSQL，API 读回 30 条成功。补充修复空采集不记 ingestion run、部分采集源失败仍报告 completed 的状态问题；新增空采集/部分源失败/模型未配置保留文章/补导范围及 SQLite 日期回放等回归测试。Python 全套 `uv run --locked pytest -q` 33 passed + 9 subtests，Ruff 与 mypy 通过。现有 TrendRadar/MCP 运行容器未触碰。当前另外确认运行容器存在一个私网 OpenAI-compatible 模型端点且 models-list 可读；未运行生成调用。真实文章 AI 分析、重复采集复验及失败重试仍需单独验收。
+状态（2026-10-20）：`trendradar/intelligence/` adapter 和提示词已实现；复用现有 NewsNow/RSS 数据结构及 LiteLLM `AIClient`；新增 URL 规范化与稳定 UUID、历史首次采集时间保留、文章级结构化 JSON 校验、先存文章后分析、按模型/Prompt 版本请求候选文章、失败记录/重试窗口。新增 SQLite 受控补导命令 `python -m trendradar.intelligence.backfill --days N`（范围 1–90，默认跳过 AI；显式 `--analyze` 才调用模型），PostgreSQL 恢复后可用原始 SQLite 记录补入；通过隔离 PostgreSQL + 实际 TrendRadar LocalStorageBackend SQLite 的 Docker 网络端到端验证，补导结果 inserted=1，Fastify 查回 1 条 `not_requested` 新闻。另用当前 NewsNow DataFetcher 真实获取百度热搜 30 条，经 `build_batch` 标准化和仅 loopback 临时暴露的内部导入路由写入独立 PostgreSQL，API 查回 30 条；分析开关关闭、状态为 `not_requested`，没有模型生成调用。补充修复空采集不记 ingestion run、部分采集源失败仍报告 completed 的状态问题；新增空采集/部分源失败/模型未配置保留文章/补导范围及 SQLite 日期回放等回归测试。Python 全套 `uv run --locked pytest -q` 33 passed + 9 subtests，Ruff 与 mypy 通过。现有 TrendRadar/MCP 运行容器未触碰。当前另外确认运行容器存在一个私网 OpenAI-compatible 模型端点且 models-list 可读；未运行生成调用。真实文章 AI 分析、重复采集复验及失败重试仍需单独验收。
 
 ## P3 — React Web
 
@@ -37,7 +37,7 @@
 3. Compose 静态服务 + same-origin `/api/v1` reverse proxy；页面具备 loading/error/empty/分析状态，不用 mock 替代数据。
 4. React 核心流程测试、build/typecheck/lint；本机浏览器/HTTP smoke 检查接口与页面刷新。
 
-状态（2026-10-20）：React + TypeScript 工作台、服务端关键词/来源/日期筛选和分页、四频道、新闻详情/分析状态、系统采集状态、错误/空/加载界面、同源 Nginx reverse proxy 和 Docker Web 服务已实现。新闻列表响应新增独立的 `analysisSummary`，来源 `summary` 与后台 AI 摘要分开显示；真实 PostgreSQL→Fastify 冒烟确认两个字段分别返回正确内容。`npm run build/typecheck/lint/test` 通过（2 项 API client 测试）。独立 Compose 端到端验证真实采集 30 条，Web 页面 200、新闻总数 30、当日日期筛选 30 条、动态标题搜索 1 条、四分类齐全、详情及状态接口正常。该次 AI 未请求，详情明确 `not_requested`。API Bearer 未授权返回 401、公开导入路由返回 404，构建 bundle 未泄露 API/导入 token。Compose 默认 Web 绑定已收紧到 loopback；需显式配置服务器 LAN IP 才发布到局域网；API 仍只发布在 loopback，数据库和导入接口不发布宿主机端口。另以隔离临时 Compose 将 Web 绑定 `192.168.2.117:18081`，本机经该 LAN 地址请求页面返回 200、`/healthz` 返回 `ok`；临时服务与 volume 已清理。此为接口绑定/HTTP smoke，不等价于从另一台公司 LAN 设备或真实防火墙环境人工验收。
+状态（2026-10-20）：React + TypeScript 工作台、服务端关键词/来源/日期筛选和分页、四频道、新闻详情/分析状态、系统采集状态、错误/空/加载界面、同源 Nginx reverse proxy 和 Docker Web 服务已实现。新闻列表响应新增独立的 `analysisSummary`，来源 `summary` 与后台 AI 摘要分开显示；真实 PostgreSQL→Fastify 冒烟确认两个字段分别返回正确内容。`npm run build/typecheck/lint/test` 通过（2 项 API client 测试）。在独立 LAN 验收 Compose 中，真实 DataFetcher→标准 `build_batch` 规范化→私有 ingestion API→PostgreSQL→Fastify，入库 30 条；Web 只绑定服务器 LAN 地址 `192.168.2.117:8081`，API 仅 loopback `127.0.0.1:13001`，DB 和 ingestion 无宿主机端口。通过该 LAN 地址的 HTTP smoke 确认页面、health、真实新闻列表（30 条）、动态标题搜索、四分类、详情、`not_requested` 分析状态、采集状态均正确，未认证的公网写入路径返回 404。该 LAN Compose 当前保持运行，以便另一台公司 LAN 设备进行最终浏览器/防火墙验收；本机经 LAN 地址的 HTTP 请求仍不等价于从另一台设备实际浏览器访问。未运行 AI 生成调用。
 
 ## P4 — Cloudflare Relay（P3 通过后）
 
