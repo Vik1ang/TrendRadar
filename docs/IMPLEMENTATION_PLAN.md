@@ -37,7 +37,7 @@
 3. Compose 静态服务 + same-origin `/api/v1` reverse proxy；页面具备 loading/error/empty/分析状态，不用 mock 替代数据。
 4. React 核心流程测试、build/typecheck/lint；本机浏览器/HTTP smoke 检查接口与页面刷新。
 
-状态（2026-10-20）：React + TypeScript 工作台、服务端关键词/来源/日期筛选和分页、四频道、新闻详情/分析状态、系统采集状态、错误/空/加载界面、同源 Nginx reverse proxy 和 Docker Web 服务已实现。新闻列表响应新增独立的 `analysisSummary`，来源 `summary` 与后台 AI 摘要分开显示；真实 PostgreSQL→Fastify 冒烟确认两个字段分别返回正确内容。`npm run build/typecheck/lint/test` 通过（2 项 API client 测试）。在独立 LAN 验收 Compose 中，真实 DataFetcher→标准 `build_batch` 规范化→私有 ingestion API→PostgreSQL→Fastify，入库 30 条；Web 只绑定服务器 LAN 地址 `192.168.2.117:8081`，API 仅 loopback `127.0.0.1:13001`，DB 和 ingestion 无宿主机端口。通过该 LAN 地址的 HTTP smoke 确认页面、health、真实新闻列表（30 条）、动态标题搜索、四分类、详情、`not_requested` 分析状态、采集状态均正确，未认证的公网写入路径返回 404。该 LAN Compose 当前保持运行，以便另一台公司 LAN 设备进行最终浏览器/防火墙验收；本机经 LAN 地址的 HTTP 请求仍不等价于从另一台设备实际浏览器访问。未运行 AI 生成调用。
+状态（2026-10-20）：React + TypeScript 工作台、服务端关键词/来源/日期筛选和分页、四频道、新闻详情/分析状态、系统采集状态、错误/空/加载界面、同源 Nginx reverse proxy 和 Docker Web 服务已实现。新闻列表响应新增独立的 `analysisSummary`，来源 `summary` 与后台 AI 摘要分开显示；真实 PostgreSQL→Fastify 冒烟确认两个字段分别返回正确内容。`npm run build/typecheck/lint/test` 通过（2 项 API client 测试）。在独立 LAN 验收 Compose 中，真实 DataFetcher→标准 `build_batch` 规范化→私有 ingestion API→PostgreSQL→Fastify，入库 30 条；Web 只绑定服务器 LAN 地址 `192.168.2.117:8081`，API 仅 loopback `127.0.0.1:13001`，DB 和 ingestion 无宿主机端口。通过该 LAN 地址的 HTTP smoke 确认页面、health、真实新闻列表（30 条）、动态标题搜索、四分类、详情、`not_requested` 分析状态、采集状态均正确，未认证的公网写入路径返回 404。完整 Compose restart 后 PostgreSQL、Fastify、ingestion、Web 四服务健康，仍可读取 30 条持久化新闻（不代表宿主机重启验收）。该 LAN Compose 当前保持运行，以便另一台公司 LAN 设备进行最终浏览器/防火墙验收；本机经 LAN 地址的 HTTP 请求仍不等价于从另一台设备实际浏览器访问。未运行 AI 生成调用。
 
 ## P4 — Cloudflare Relay（P3 通过后）
 
