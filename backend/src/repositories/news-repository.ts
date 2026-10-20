@@ -91,7 +91,7 @@ export class NewsRepository {
 
   async getAnalysis(id: string): Promise<Record<string, unknown> | null> {
     const result = await this.pool.query(
-      `SELECT status, summary, key_facts AS "keyFacts", background,
+      `SELECT status, error_code AS "errorCode", summary, key_facts AS "keyFacts", background,
               potential_impacts AS "potentialImpacts", uncertainties, evidence_scope AS "evidenceScope",
               model_name AS "modelName", prompt_version AS "promptVersion",
               analysis_version AS "analysisVersion", analyzed_at AS "analyzedAt"

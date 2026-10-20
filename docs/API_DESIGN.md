@@ -28,7 +28,7 @@
 | `POST /api/v1/internal/ingestion`（仅 `ingest-api:3002`） | 幂等批次导入 sources/articles/categories/analysis/run；要求独立 Bearer token，响应 run ID 及 inserted/updated 计数；只对内部网络可达 |
 | `POST /api/v1/internal/analysis-candidates`（仅 `ingest-api:3002`） | 为给定文章 ID 集合筛出缺少指定 model/prompt/analysis 版本结果的文章；短暂失败有重试抑制窗口；只对内部网络可达 |
 
-文章对象包含 `id,title,source,publishedAt,firstSeenAt,url,summary,analysisSummary,contentStatus,categories,analysisStatus`。`summary` 是原 RSS 来源摘要；`analysisSummary` 是最近一次已完成 AI 分析的摘要，非 `completed` 时为 `null`。分析资源仍包含 `summary,keyFacts,background,potentialImpacts,uncertainties,evidenceScope,modelName,promptVersion,analysisVersion,status,analyzedAt`。结构化列表字段始终为数组，空缺内容为 `null`/空数组并保持契约一致。
+文章对象包含 `id,title,source,publishedAt,firstSeenAt,url,summary,analysisSummary,contentStatus,categories,analysisStatus`。`summary` 是原 RSS 来源摘要；`analysisSummary` 是最近一次已完成 AI 分析的摘要，非 `completed` 时为 `null`。分析资源包含 `status,errorCode,summary,keyFacts,background,potentialImpacts,uncertainties,evidenceScope,modelName,promptVersion,analysisVersion,analyzedAt`；`errorCode` 只在分析失败时提供稳定的机器可读错误码。结构化列表字段始终为数组，空缺内容为 `null`/空数组并保持契约一致。
 
 ## 兼容和权限
 

@@ -81,6 +81,7 @@ export async function registerNewsRoutes(app: FastifyInstance, service: NewsServ
       type: 'object', required: ['status'], additionalProperties: false,
       properties: {
         status: { type: 'string', enum: ['pending', 'processing', 'completed', 'failed', 'not_requested'] },
+        errorCode: { type: 'string' },
         summary: { type: 'string' }, keyFacts: { type: 'array' }, background: { type: 'string' },
         potentialImpacts: { type: 'array' }, uncertainties: { type: 'array' }, evidenceScope: { type: 'string', enum: ['title', 'summary', 'content'] },
         modelName: { type: 'string' }, promptVersion: { type: 'string' }, analysisVersion: { type: 'integer' }, analyzedAt: { type: 'string', format: 'date-time' },
