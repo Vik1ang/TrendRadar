@@ -36,6 +36,9 @@ export async function buildApp({ pool, config }: AppDependencies): Promise<Fasti
     if (details.validation) {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid request parameters' }, requestId: request.id });
     }
+    if (details.statusCode === 400) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid request body or parameters' }, requestId: request.id });
+    }
     if (details.statusCode === 401 || details.statusCode === 404) {
       return reply.code(details.statusCode).send({ error: { code: details.statusCode === 401 ? 'UNAUTHORIZED' : 'NOT_FOUND', message: details.message }, requestId: request.id });
     }

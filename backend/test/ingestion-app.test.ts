@@ -42,6 +42,17 @@ describe('private ingestion API', () => {
     expect(response.json().error.code).toBe('VALIDATION_ERROR');
   });
 
+  it('returns a structured 400 for malformed JSON imports', async () => {
+    const app = await createTestApp();
+    const response = await app.inject({
+      method: 'POST', url: '/api/v1/internal/ingestion',
+      headers: { authorization: 'Bearer ingest-test-token', 'content-type': 'application/json' },
+      payload: '{invalid',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe('VALIDATION_ERROR');
+  });
+
   it('does not downgrade prior analysis when a reimport skips analysis', async () => {
     const statements: string[] = [];
     const fakeClient = {

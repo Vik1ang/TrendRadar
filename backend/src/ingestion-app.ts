@@ -22,8 +22,11 @@ export async function buildIngestionApp(pool: Pool, config: IngestionConfig): Pr
   });
   app.setErrorHandler((error, request, reply) => {
     request.log.error({ err: error }, 'Internal ingestion request failed');
-    const details = error as Error & { validation?: unknown; code?: string };
+    const details = error as Error & { validation?: unknown; statusCode?: number; code?: string };
     if (details.validation) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid ingestion batch' }, requestId: request.id });
+    }
+    if (details.statusCode === 400) {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid ingestion batch' }, requestId: request.id });
     }
     if (['ECONNREFUSED', 'ETIMEDOUT', '57P01', '08000', '08006', '53300'].includes(details.code ?? '')) {
