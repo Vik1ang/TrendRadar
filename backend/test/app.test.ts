@@ -86,6 +86,27 @@ describe('Fastify API boundary', () => {
     expect(response.json()).toEqual({ status: 'failed', errorCode: 'MODEL_REQUEST_FAILED' });
   });
 
+  it('omits a null analysis error code and preserves null fields', async () => {
+    const fakePool = {
+      query: async (sql: string) => sql.includes('FROM article_analyses')
+        ? { rows: [{
+          status: 'processing', errorCode: null, summary: null, keyFacts: [], background: null,
+          potentialImpacts: [], uncertainties: [], evidenceScope: 'title', modelName: 'fixture',
+          promptVersion: 'v1', analysisVersion: 1, analyzedAt: null,
+        }], rowCount: 1 }
+        : { rows: [], rowCount: 0 },
+      connect: async () => { throw new Error('unexpected database transaction'); },
+    } as unknown as Pool;
+    const app = await createTestApp(fakePool);
+    const response = await app.inject({
+      method: 'GET', url: '/api/v1/news/11111111-1111-4111-8111-111111111111/analysis',
+      headers: { authorization: 'Bearer test-token' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: 'processing', summary: null, background: null, analyzedAt: null });
+    expect(response.json()).not.toHaveProperty('errorCode');
+  });
+
   it('validates list parameters before reaching the repository', async () => {
     const app = await createTestApp();
     const response = await app.inject({

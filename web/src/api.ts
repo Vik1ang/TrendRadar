@@ -15,9 +15,9 @@ export type Article = {
 };
 export type Page = { data: Article[]; pagination: { limit: number; offset: number; total: number; hasMore: boolean } };
 export type Analysis = {
-  status: Article['analysisStatus']; summary?: string; keyFacts?: string[]; background?: string;
+  status: Article['analysisStatus']; errorCode?: string; summary?: string | null; keyFacts?: string[]; background?: string | null;
   potentialImpacts?: string[]; uncertainties?: string[]; evidenceScope?: 'title' | 'summary' | 'content';
-  modelName?: string; promptVersion?: string; analysisVersion?: number; analyzedAt?: string;
+  modelName?: string; promptVersion?: string; analysisVersion?: number; analyzedAt?: string | null;
 };
 export type SystemStatus = {
   database: 'ok'; articleCount: number; latestArticleAt: string | null;

@@ -82,9 +82,9 @@ export async function registerNewsRoutes(app: FastifyInstance, service: NewsServ
       properties: {
         status: { type: 'string', enum: ['pending', 'processing', 'completed', 'failed', 'not_requested'] },
         errorCode: { type: 'string' },
-        summary: { type: 'string' }, keyFacts: { type: 'array' }, background: { type: 'string' },
+        summary: { type: ['string', 'null'] }, keyFacts: { type: 'array' }, background: { type: ['string', 'null'] },
         potentialImpacts: { type: 'array' }, uncertainties: { type: 'array' }, evidenceScope: { type: 'string', enum: ['title', 'summary', 'content'] },
-        modelName: { type: 'string' }, promptVersion: { type: 'string' }, analysisVersion: { type: 'integer' }, analyzedAt: { type: 'string', format: 'date-time' },
+        modelName: { type: 'string' }, promptVersion: { type: 'string' }, analysisVersion: { type: 'integer' }, analyzedAt: { type: ['string', 'null'], format: 'date-time' },
       },
     } }, security: [{ bearerAuth: [] }], tags: ['news'], summary: 'Get pre-generated article analysis' },
     preHandler: app.authenticateRead,

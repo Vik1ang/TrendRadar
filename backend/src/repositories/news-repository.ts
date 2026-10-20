@@ -98,7 +98,10 @@ export class NewsRepository {
          FROM article_analyses WHERE article_id = $1
          ORDER BY created_at DESC, analyzed_at DESC NULLS LAST LIMIT 1`, [id],
     );
-    if (result.rows[0]) return result.rows[0] as Record<string, unknown>;
+    if (result.rows[0]) {
+      const { errorCode, ...analysis } = result.rows[0] as Record<string, unknown>;
+      return errorCode === null || errorCode === undefined ? analysis : { ...analysis, errorCode };
+    }
     const article = await this.pool.query<{ analysis_status: string }>('SELECT analysis_status FROM articles WHERE id = $1', [id]);
     if (!article.rowCount) return null;
     return { status: article.rows[0]?.analysis_status ?? 'pending' };

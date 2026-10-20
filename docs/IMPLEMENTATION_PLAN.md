@@ -17,7 +17,7 @@
 
 验收：Migration 从空库部署成功；strict/typecheck/lint/test 通过；服务能查询 PostgreSQL；DB 不对宿主机/公网开放；OpenAPI 与实际路由一致。
 
-状态（2026-10-20）：基础 schema/migration、Strict Fastify 查询 API、Bearer 认证、分页/中文子串搜索、OpenAPI、独立私有导入 API/凭据和私有 DB Compose 已实现。`npm run build/typecheck/lint/test` 通过（最新 15 项测试）。测试覆盖健康/业务/导入路由在数据库拒绝连接时的稳定 503 响应，且不泄露数据库错误细节；失败分析资源返回稳定 `errorCode`。独立 PostgreSQL Compose 实测重复导入 inserted=1 后 updated=1；新增状态回归检查并用隔离 PostgreSQL 实测已完成分析的文章被 `not_requested` 重导入后，`articles.analysis_status/article_analyses.status` 仍为 `completed/completed`。实际 PostgreSQL 还验证了新闻列表同时返回 `summary` 来源摘要和 `analysisSummary` AI 摘要，以及只在已完成 AI 摘要中出现的 `DeepSeek` 关键词可搜索命中。真实 DataFetcher→Python adapter→PostgreSQL→API 的冒烟也已验证 30 条 NewsNow 百度热搜入库，并由只读 API 查询到。DB/导入服务没有公开映射端口；测试环境均单独创建并清理。
+状态（2026-10-20）：基础 schema/migration、Strict Fastify 查询 API、Bearer 认证、分页/中文子串搜索、OpenAPI、独立私有导入 API/凭据和私有 DB Compose 已实现。`npm run build/typecheck/lint/test` 通过（最新 16 项测试）。测试覆盖健康/业务/导入路由在数据库拒绝连接时的稳定 503 响应，且不泄露数据库错误细节；失败分析资源返回稳定 `errorCode`，非失败状态省略空错误码并为可空分析文本保留 JSON null。独立 PostgreSQL Compose 实测重复导入 inserted=1 后 updated=1；新增状态回归检查并用隔离 PostgreSQL 实测已完成分析的文章被 `not_requested` 重导入后，`articles.analysis_status/article_analyses.status` 仍为 `completed/completed`。实际 PostgreSQL 还验证了新闻列表同时返回 `summary` 来源摘要和 `analysisSummary` AI 摘要，以及只在已完成 AI 摘要中出现的 `DeepSeek` 关键词可搜索命中。真实 DataFetcher→Python adapter→PostgreSQL→API 的冒烟也已验证 30 条 NewsNow 百度热搜入库，并由只读 API 查询到。DB/导入服务没有公开映射端口；测试环境均单独创建并清理。
 
 ## P2 — TrendRadar 集成
 
