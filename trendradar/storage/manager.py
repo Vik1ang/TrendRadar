@@ -6,7 +6,7 @@
 """
 
 import os
-from typing import Optional
+from typing import Any, Optional
 
 from trendradar.storage.base import StorageBackend, NewsData, RSSData
 from trendradar.utils.time import DEFAULT_TIMEZONE
@@ -418,3 +418,31 @@ def get_storage_manager(
         )
 
     return _storage_manager
+
+
+def get_storage_manager_from_config(config: dict[str, Any], force_new: bool = False) -> StorageManager:
+    """Build the configured storage manager using TrendRadar's normalized config."""
+    storage = config.get("STORAGE", {})
+    remote = storage.get("REMOTE", {})
+    local = storage.get("LOCAL", {})
+    pull = storage.get("PULL", {})
+    formats = storage.get("FORMATS", {})
+    return get_storage_manager(
+        backend_type=storage.get("BACKEND", "auto"),
+        data_dir=local.get("DATA_DIR", "output"),
+        enable_txt=formats.get("TXT", True),
+        enable_html=formats.get("HTML", True),
+        remote_config={
+            "bucket_name": remote.get("BUCKET_NAME", ""),
+            "access_key_id": remote.get("ACCESS_KEY_ID", ""),
+            "secret_access_key": remote.get("SECRET_ACCESS_KEY", ""),
+            "endpoint_url": remote.get("ENDPOINT_URL", ""),
+            "region": remote.get("REGION", ""),
+        },
+        local_retention_days=local.get("RETENTION_DAYS", 0),
+        remote_retention_days=remote.get("RETENTION_DAYS", 0),
+        pull_enabled=pull.get("ENABLED", False),
+        pull_days=pull.get("DAYS", 7),
+        timezone=config.get("TIMEZONE", DEFAULT_TIMEZONE),
+        force_new=force_new,
+    )

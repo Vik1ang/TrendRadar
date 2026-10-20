@@ -21,7 +21,12 @@ trendradar = "trendradar.__main__:main"
 trendradar-mcp = "mcp_server.server:run_server"
 
 [dependency-groups]
-dev = []
+dev = [
+    "mypy>=1.12,<2",
+    "pytest==9.1.1",
+    "ruff>=0.12,<1",
+    "types-requests>=2.32,<3",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -29,3 +34,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["trendradar", "mcp_server"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

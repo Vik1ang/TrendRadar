@@ -1,0 +1,19 @@
+# Opt-in overlay: first start the independent intelligence stack, then apply this
+# file to the existing TrendRadar Compose project to connect its crawler to the
+# private ingestion service. It does not alter notification, SQLite, cron, or MCP settings.
+services:
+  trendradar:
+    environment:
+      INTELLIGENCE_ENABLED: ${INTELLIGENCE_ENABLED:-false}
+      INTELLIGENCE_INGEST_URL: ${INTELLIGENCE_INGEST_URL:-http://ingest-api:3002/api/v1/internal/ingestion}
+      INTELLIGENCE_ANALYSIS_ENABLED: ${INTELLIGENCE_ANALYSIS_ENABLED:-true}
+      INTELLIGENCE_MAX_ANALYSES_PER_RUN: ${INTELLIGENCE_MAX_ANALYSES_PER_RUN:-100}
+      INGEST_TOKEN: ${INGEST_TOKEN:?Set INGEST_TOKEN in .env}
+    networks:
+      - default
+      - intelligence-db
+
+networks:
+  intelligence-db:
+    external: true
+    name: trendradar-intelligence-db

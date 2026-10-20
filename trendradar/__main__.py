@@ -23,6 +23,7 @@ from trendradar.ai import AIAnalyzer, AIAnalysisResult
 from trendradar.core.scheduler import ResolvedSchedule
 from trendradar.commands import check_all_versions, run_doctor, run_test_notification, handle_status_commands
 from trendradar.commands.version import _fetch_remote_version, _parse_version
+from trendradar.intelligence.pipeline import run_intelligence_pipeline
 
 
 
@@ -86,6 +87,8 @@ class NewsAnalyzer:
         self._rss_total_count = 0
         self._rss_matched_count = 0
         self._hotlist_total_count = 0
+        self._intelligence_news_data = None
+        self._intelligence_rss_data = None
 
         # 初始化存储管理器（使用 AppContext）
         self._init_storage_manager()
@@ -973,6 +976,7 @@ class NewsAnalyzer:
         news_data = convert_crawl_results_to_news_data(
             results, id_to_name, failed_ids, crawl_time, crawl_date
         )
+        self._intelligence_news_data = news_data
 
         # 保存到存储后端（SQLite）
         if self.storage_manager.save_news_data(news_data):
@@ -1065,6 +1069,7 @@ class NewsAnalyzer:
 
             # 抓取数据
             rss_data = fetcher.fetch_all()
+            self._intelligence_rss_data = rss_data
 
             self._rss_source_total = len(feeds)
             self._rss_source_failed = len(rss_data.failed_ids)
@@ -1626,6 +1631,20 @@ class NewsAnalyzer:
                 rss_items=rss_items, rss_new_items=rss_new_items,
                 raw_rss_items=raw_rss_items, rss_new_urls=rss_new_urls
             )
+
+            # The optional intelligence adapter runs after original reporting/notifications.
+            # Failures must not invalidate TrendRadar's SQLite data or legacy delivery path.
+            if os.environ.get("INTELLIGENCE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+                try:
+                    result = run_intelligence_pipeline(
+                        self._intelligence_news_data,
+                        self._intelligence_rss_data,
+                        self.ctx.config,
+                    )
+                    if result:
+                        print(f"[Intelligence] 导入完成: {result.get('insertedCount', 0)} 条新增，{result.get('updatedCount', 0)} 条更新")
+                except Exception as e:
+                    print(f"[Intelligence] 导入/分析暂时失败，原版 SQLite 与报告链已保留 ({type(e).__name__})")
 
         except Exception as e:
             print(f"分析流程执行出错: {e}")
