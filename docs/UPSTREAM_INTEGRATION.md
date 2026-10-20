@@ -52,5 +52,5 @@
 - 在独立临时 PostgreSQL 16 Compose project 部署迁移；用非生产 fixture 经私有 `ingest-api` 导入两次，计数分别为 inserted=1、updated=1；公开 API listener 的写入路由返回 404。读 API 验证中文搜索、分类筛选、新闻详情、pending 分析、health、Bearer 拒绝和 OpenAPI。
 - `docker compose -p trendradar-intelligence-p1test ... up --build --wait` 启动 PostgreSQL、read API、private ingest API 成功，均 healthy；PostgreSQL 和 ingest API 都无 host port publish；随后清理该临时项目和测试 volume。既有 `trendradar` 与 `trendradar-mcp` 容器仍在运行。
 - P2/P3 临时 PostgreSQL/Web Compose 使用真实 `DataFetcher.crawl_websites` NewsNow 百度热搜采集 30 条，经新 Python normalizer 和 internal ingestion 入库；Web 同源反代验证 30 条列表、当日日期筛选 30 条、动态新闻标题子串搜索 1 条、4 类分类、详情、`not_requested` 分析和最近 run；直接 API 未授权 401，公开写路由 404，浏览器 bundle 无业务 tokens。模型调用明确关闭，这不是模型实际生成分析的证据。
-- Python `uv run --locked pytest -q`: 33 passed + 9 subtests；Ruff 和 `mypy trendradar/intelligence` 通过。Web build/typecheck/lint 通过、Vitest 2 项通过。
+- Python `uv run --locked pytest -q`: 33 passed + 9 subtests；`ruff check trendradar/intelligence` 和 `mypy trendradar/intelligence` 通过。全仓库 `ruff check .` 当前失败（2,161 项既有告警，主要在未改动的 TrendRadar/`docker/manage.py` 代码），未为此改动上游核心。Web build/typecheck/lint 通过、Vitest 2 项通过。
 - 临时测试端口仅绑定 loopback；测试 volume/服务已删除。现有 TrendRadar/MCP 容器没有重启或变更。
