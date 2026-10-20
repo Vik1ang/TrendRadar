@@ -1,0 +1,14 @@
+.env
+.venv/
+node_modules/
+backend/node_modules/
+backend/dist/
+web/dist/
+web/tsconfig.tsbuildinfo
+relay-agent/dist/
+cloudflare/worker/.wrangler/
+cloudflare/worker/.dev.vars
+backups/
+__pycache__/
+*.py[cod]
+tests/__pycache__/

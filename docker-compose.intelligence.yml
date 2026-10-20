@@ -1,0 +1,108 @@
+name: trendradar-intelligence
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-intelligence}
+      POSTGRES_USER: ${POSTGRES_USER:-intelligence}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - intelligence-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [intelligence-db]
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 3001
+      DATABASE_URL: postgres://${POSTGRES_USER:-intelligence}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-intelligence}
+      API_READ_TOKEN: ${API_READ_TOKEN:?Set API_READ_TOKEN in .env}
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-3001}:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks: [intelligence-db, intelligence-edge]
+
+  ingest-api:
+    build: ./backend
+    command: ["node", "dist/src/ingestion-server.js"]
+    restart: unless-stopped
+    environment:
+      INGEST_HOST: 0.0.0.0
+      INGEST_PORT: 3002
+      DATABASE_URL: postgres://${POSTGRES_USER:-intelligence}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-intelligence}
+      INGEST_TOKEN: ${INGEST_TOKEN:?Set INGEST_TOKEN in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/internal/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks: [intelligence-db]
+
+  web:
+    build: ./web
+    restart: unless-stopped
+    environment:
+      API_READ_TOKEN: ${API_READ_TOKEN:?Set API_READ_TOKEN in .env}
+    ports:
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8081}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks: [intelligence-edge]
+
+  relay-agent:
+    profiles: [relay]
+    build: ./relay-agent
+    restart: unless-stopped
+    environment:
+      RELAY_WORKER_URL: ${RELAY_WORKER_URL:-}
+      RELAY_AGENT_TOKEN: ${RELAY_AGENT_TOKEN:-}
+      API_READ_TOKEN: ${API_READ_TOKEN:?Set API_READ_TOKEN in .env}
+      LOCAL_API_ORIGIN: http://api:3001
+      PROXY_URL: ${RELAY_PROXY_URL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9900/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+      start_period: 20s
+    networks: [intelligence-edge]
+
+volumes:
+  intelligence-postgres:
+
+networks:
+  intelligence-db:
+    internal: true
+    name: trendradar-intelligence-db
+  intelligence-edge:
+    driver: bridge
