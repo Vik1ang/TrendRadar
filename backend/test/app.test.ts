@@ -30,6 +30,33 @@ describe('Fastify API boundary', () => {
     expect(response.json()).toEqual({ status: 'ok', database: 'ok' });
   });
 
+  it('reports database unavailability from health without leaking database errors', async () => {
+    const fakePool = {
+      query: async () => { throw Object.assign(new Error('private connection detail'), { code: 'ECONNREFUSED' }); },
+      connect: async () => { throw new Error('unexpected database transaction'); },
+    } as unknown as Pool;
+    const app = await createTestApp(fakePool);
+    const response = await app.inject({ method: 'GET', url: '/api/v1/health' });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ status: 'error', database: 'unavailable' });
+    expect(response.body).not.toContain('private connection detail');
+  });
+
+  it('maps read-query database failures to a stable 503 error', async () => {
+    const fakePool = {
+      query: async () => { throw Object.assign(new Error('private connection detail'), { code: 'ECONNREFUSED' }); },
+      connect: async () => { throw new Error('unexpected database transaction'); },
+    } as unknown as Pool;
+    const app = await createTestApp(fakePool);
+    const response = await app.inject({
+      method: 'GET', url: '/api/v1/news?limit=10',
+      headers: { authorization: 'Bearer test-token' },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error).toEqual({ code: 'DATABASE_UNAVAILABLE', message: 'Database is temporarily unavailable' });
+    expect(response.body).not.toContain('private connection detail');
+  });
+
   it('rejects unauthenticated business reads', async () => {
     const app = await createTestApp();
     const response = await app.inject({ method: 'GET', url: '/api/v1/news' });

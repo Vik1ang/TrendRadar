@@ -53,6 +53,22 @@ describe('private ingestion API', () => {
     expect(response.json().error.code).toBe('VALIDATION_ERROR');
   });
 
+  it('maps private database failures to a stable 503 response', async () => {
+    const fakePool = {
+      query: async () => { throw Object.assign(new Error('private connection detail'), { code: 'ECONNREFUSED' }); },
+      connect: async () => { throw new Error('unexpected database transaction'); },
+    } as unknown as Pool;
+    const app = await createTestApp(fakePool);
+    const response = await app.inject({
+      method: 'POST', url: '/api/v1/internal/analysis-candidates',
+      headers: { authorization: 'Bearer ingest-test-token' },
+      payload: { articleIds: [], modelName: 'fixture', promptVersion: 'v1', analysisVersion: 1 },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error).toEqual({ code: 'DATABASE_UNAVAILABLE', message: 'Database is temporarily unavailable' });
+    expect(response.body).not.toContain('private connection detail');
+  });
+
   it('does not downgrade prior analysis when a reimport skips analysis', async () => {
     const statements: string[] = [];
     const fakeClient = {
