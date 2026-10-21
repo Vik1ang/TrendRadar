@@ -43,3 +43,28 @@ def test_build_batch_preserves_historical_first_seen_time():
     _sources, articles = build_batch(data, None, "Asia/Shanghai")
 
     assert articles[0]["firstSeenAt"] == "2026-10-19T01:30:00Z"
+
+
+def test_build_batch_assigns_baseline_categories_without_ai_analysis():
+    news = NewsData(
+        date="2026-10-20",
+        crawl_time="10:00",
+        items={"source-a": [
+            NewsItem(title="DeepSeek 发布新模型", source_id="source-a"),
+            NewsItem(title="国债收益率变化", source_id="source-a"),
+            NewsItem(title="地震后救援持续", source_id="source-a"),
+            NewsItem(title="普通热点标题", source_id="source-a"),
+        ]},
+        id_to_name={"source-a": "Source A"},
+    )
+
+    _sources, articles = build_batch(news, None, "Asia/Shanghai")
+
+    assert articles[0]["categories"] == [
+        {"id": "ai", "assignedBy": "rule"},
+        {"id": "technology", "assignedBy": "rule"},
+    ]
+    assert articles[1]["categories"] == [{"id": "finance", "assignedBy": "rule"}]
+    assert articles[2]["categories"] == [{"id": "society", "assignedBy": "rule"}]
+    assert articles[3]["categories"] == []
+    assert all(article["analysisStatus"] == "pending" for article in articles)

@@ -77,8 +77,10 @@ def analyze_article(client: ChatClient, article: dict[str, Any], source_name: st
             max_tokens=2200,
         )
         categories, result = parse_analysis(response)
+        known_categories = {item["id"] for item in categories}
+        baseline_categories = [item for item in article.get("categories", []) if item.get("id") not in known_categories]
         return {
-            "categories": categories,
+            "categories": [*baseline_categories, *categories],
             "replaceCategories": True,
             "analysis": {
                 **result,
@@ -96,8 +98,9 @@ def analyze_article(client: ChatClient, article: dict[str, Any], source_name: st
     except Exception:  # noqa: BLE001 — isolate provider-specific failures to one article.
         code = "MODEL_REQUEST_FAILED"
     return {
-        "categories": [],
-        "replaceCategories": True,
+        # A failed model call must not erase deterministic baseline labels.
+        "categories": article.get("categories", []),
+        "replaceCategories": False,
         "analysis": {
             "keyFacts": [], "potentialImpacts": [], "uncertainties": [],
             "evidenceScope": "summary" if summary else "title",

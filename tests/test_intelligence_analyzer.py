@@ -43,3 +43,31 @@ def test_analyzer_records_scope_and_version_without_claiming_full_text():
     assert result["analysisStatus"] == "completed"
     assert result["analysis"]["evidenceScope"] == "title"
     assert result["analysis"]["promptVersion"] == "article-analysis-v1"
+
+
+def test_successful_analysis_keeps_baseline_categories_when_model_omits_them():
+    class FakeClient:
+        model = "test/model"
+
+        def chat(self, messages, **kwargs):
+            payload = json.loads(GOOD_RESPONSE)
+            payload["categories"] = []
+            return json.dumps(payload)
+
+    baseline = [{"id": "technology", "assignedBy": "rule"}]
+    result = analyze_article(FakeClient(), {"title": "芯片发布", "categories": baseline}, "测试源")
+    assert result["categories"] == baseline
+
+
+def test_failed_analysis_preserves_baseline_categories():
+    class FailedClient:
+        model = "test/model"
+
+        def chat(self, messages, **kwargs):
+            raise RuntimeError("provider unavailable")
+
+    baseline = [{"id": "finance", "assignedBy": "rule"}]
+    result = analyze_article(FailedClient(), {"title": "国债", "categories": baseline}, "测试源")
+    assert result["analysisStatus"] == "failed"
+    assert result["categories"] == baseline
+    assert result["replaceCategories"] is False

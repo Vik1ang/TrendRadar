@@ -19,4 +19,14 @@ describe('browser API client', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { message: 'Database is temporarily unavailable' } }), { status: 503 })));
     await expect(api.status()).rejects.toThrow('Database is temporarily unavailable');
   });
+
+  it('separates API reachability from database health when the health route returns 503', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'error', database: 'unavailable' }), { status: 503 })));
+    await expect(api.health()).resolves.toEqual({ api: 'reachable', database: 'unavailable' });
+  });
+
+  it('does not report a stale healthy state when the health request cannot reach the API', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('NetworkError')));
+    await expect(api.health()).rejects.toThrow('NetworkError');
+  });
 });

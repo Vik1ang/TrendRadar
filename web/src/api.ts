@@ -27,6 +27,10 @@ export type SystemStatus = {
     analysisSucceeded: number; analysisFailed: number; errorSummary: string | null;
   };
 };
+export type HealthStatus = {
+  api: 'checking' | 'reachable' | 'unreachable';
+  database: 'checking' | 'ok' | 'unavailable' | 'unknown';
+};
 
 async function request<T>(path: string): Promise<T> {
   const response = await fetch(`/api/v1${path}`, { headers: { Accept: 'application/json' } });
@@ -44,4 +48,11 @@ export const api = {
   categories: () => request<Category[]>('/categories'),
   sources: () => request<Source[]>('/sources'),
   status: () => request<SystemStatus>('/status'),
+  health: async (): Promise<HealthStatus> => {
+    const response = await fetch('/api/v1/health', { headers: { Accept: 'application/json' } });
+    const body = await response.json().catch(() => null) as { status?: string; database?: string } | null;
+    if (response.ok && body?.status === 'ok' && body.database === 'ok') return { api: 'reachable', database: 'ok' };
+    if (body?.status === 'error' && body.database === 'unavailable') return { api: 'reachable', database: 'unavailable' };
+    return { api: 'reachable', database: 'unknown' };
+  },
 };

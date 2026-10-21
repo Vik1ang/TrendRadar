@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, uuid5
 
+from trendradar.intelligence.classification import classify_article
 from trendradar.storage.base import NewsData, RSSData
 
 _TRACKING_KEYS = {"fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "spm"}
@@ -103,7 +104,7 @@ def build_batch(news_data: NewsData | None, rss_data: RSSData | None, timezone_n
                     "firstSeenAt": first_seen_at,
                     "contentStatus": "title_only",
                     "analysisStatus": "pending",
-                    "categories": [],
+                    "categories": classify_article(news_item.title),
                 }
 
     if rss_data:
@@ -129,7 +130,7 @@ def build_batch(news_data: NewsData | None, rss_data: RSSData | None, timezone_n
                     "firstSeenAt": first_seen_at,
                     "contentStatus": "summary_available" if summary else "title_only",
                     "analysisStatus": "pending",
-                    "categories": [],
+                    "categories": classify_article(rss_item.title, summary),
                 }
 
     return list(sources.values()), list(articles.values())

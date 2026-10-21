@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { api, type Analysis, type Article, type Category, type Source, type SystemStatus } from './api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { api, type Analysis, type Article, type Category, type HealthStatus, type Source, type SystemStatus } from './api';
+import { updateNewsSearchParams } from './news-query';
 
 const timeLabel = (value: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '采集时间';
 const fullTime = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
@@ -9,12 +10,30 @@ function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [status, setStatus] = useState<SystemStatus | null>(null);
+  const [health, setHealth] = useState<HealthStatus>({ api: 'checking', database: 'checking' });
   const [catalogError, setCatalogError] = useState('');
+  const healthRequest = useRef(0);
+  const refreshHealth = useCallback(async () => {
+    const requestId = ++healthRequest.current;
+    setHealth({ api: 'checking', database: 'checking' });
+    try {
+      const nextHealth = await api.health();
+      if (requestId === healthRequest.current) setHealth(nextHealth);
+    } catch {
+      if (requestId === healthRequest.current) setHealth({ api: 'unreachable', database: 'unknown' });
+    }
+  }, []);
+  const refreshStatus = useCallback(async () => {
+    try { setStatus(await api.status()); }
+    catch { setStatus(null); }
+  }, []);
+  const refreshSystemStatus = useCallback(() => { void refreshStatus(); void refreshHealth(); }, [refreshHealth, refreshStatus]);
   useEffect(() => {
     Promise.all([api.categories(), api.sources(), api.status()])
       .then(([nextCategories, nextSources, nextStatus]) => { setCategories(nextCategories); setSources(nextSources); setStatus(nextStatus); })
       .catch((error: unknown) => setCatalogError(error instanceof Error ? error.message : '加载系统信息失败'));
-  }, []);
+    void refreshHealth();
+  }, [refreshHealth]);
   return <div className="app-shell">
     <aside className="sidebar">
       <Link className="brand" to="/"><span className="brand-mark">T</span><span><b>TrendRadar</b><small>INTELLIGENCE CENTER</small></span></Link>
@@ -34,7 +53,7 @@ function App() {
       <Routes>
         <Route path="/" element={<NewsPage categories={categories} sources={sources} />} />
         <Route path="/news/:id" element={<DetailPage />} />
-        <Route path="/status" element={<StatusPage status={status} onRefresh={() => api.status().then(setStatus).catch(() => setStatus(null))} />} />
+        <Route path="/status" element={<StatusPage status={status} health={health} onRefresh={refreshSystemStatus} />} />
         <Route path="*" element={<div className="empty-state">页面不存在 <Link to="/">返回新闻</Link></div>} />
       </Routes>
     </main>
@@ -43,6 +62,7 @@ function App() {
 
 function NewsPage({ categories, sources }: { categories: Category[]; sources: Source[] }) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const [query, setQuery] = useState(searchParams.get('q') ?? '');
   const [page, setPage] = useState<{ data: Article[]; pagination: { limit: number; offset: number; total: number; hasMore: boolean } } | null>(null);
   const [error, setError] = useState(''); const [loading, setLoading] = useState(true);
@@ -65,8 +85,7 @@ function NewsPage({ categories, sources }: { categories: Category[]; sources: So
   }, [params]);
 
   const updateFilter = (key: string, value: string) => {
-    const next = new URLSearchParams(searchParams); if (value) next.set(key, value); else next.delete(key);
-    next.delete('offset'); setSearchParams(next);
+    setSearchParams(updateNewsSearchParams(searchParams, key, value));
   };
   const submitSearch = (event: React.FormEvent) => { event.preventDefault(); updateFilter('q', query.trim()); };
   const clearFilters = () => { setQuery(''); setSearchParams({}); };
@@ -85,13 +104,13 @@ function NewsPage({ categories, sources }: { categories: Category[]; sources: So
     {loading && <div className="loading-state"><span className="spinner"/> 正在读取新闻…</div>}
     {error && <div className="error-panel"><b>新闻加载失败</b><span>{error}</span><button onClick={() => setSearchParams(new URLSearchParams(searchParams))}>重试</button></div>}
     {!loading && !error && page?.data.length === 0 && <div className="empty-state"><div className="empty-icon">⌕</div><b>没有找到匹配的新闻</b><span>试试更短的关键词，或清除部分筛选条件。</span>{active && <button onClick={clearFilters}>清除筛选</button>}</div>}
-    <div className="news-list">{page?.data.map((article) => <NewsCard key={article.id} article={article}/>)}</div>
+    <div className="news-list">{page?.data.map((article) => <NewsCard key={article.id} article={article} backTo={`${location.pathname}${location.search}`}/>)}</div>
     {page && page.pagination.total > page.pagination.limit && <div className="pagination"><button disabled={offset <= 0} onClick={() => updateFilter('offset', String(Math.max(0, offset - page.pagination.limit)))}>← 上一页</button><span>{Math.floor(offset / page.pagination.limit) + 1} / {Math.max(1, Math.ceil(page.pagination.total / page.pagination.limit))}</span><button disabled={!page.pagination.hasMore} onClick={() => updateFilter('offset', String(offset + page.pagination.limit))}>下一页 →</button></div>}
   </section>;
 }
 
-function NewsCard({ article }: { article: Article }) {
-  return <Link className="news-card" to={`/news/${article.id}`}>
+function NewsCard({ article, backTo }: { article: Article; backTo: string }) {
+  return <Link className="news-card" to={`/news/${article.id}`} state={{ backTo }}>
     <div className="card-main"><div className="card-kicker"><span className="source-name">{article.source.name}</span><span className="separator">·</span><time>{timeLabel(article.publishedAt ?? article.firstSeenAt)}</time>{article.categories.map((item) => <span key={item.id} className="tag">{item.name}</span>)}</div>
       <h2>{article.title}</h2>{article.summary && <p>{article.summary}</p>}
       {article.analysisStatus === 'completed' && <div className="analysis-teaser"><span>AI 摘要</span>{article.analysisSummary ?? '分析已完成，打开详情查看结构化分析。'}</div>}
@@ -104,7 +123,9 @@ function statusLabel(status: Article['analysisStatus']) {
 }
 
 function DetailPage() {
-  const { id = '' } = useParams(); const navigate = useNavigate();
+  const { id = '' } = useParams(); const navigate = useNavigate(); const location = useLocation();
+  const backTo = (location.state as { backTo?: unknown } | null)?.backTo;
+  const returnToList = () => navigate(typeof backTo === 'string' && backTo.startsWith('/') && !backTo.startsWith('//') ? backTo : '/');
   const [article, setArticle] = useState<Article | null>(null); const [analysis, setAnalysis] = useState<Analysis | null>(null); const [error, setError] = useState('');
   useEffect(() => {
     let alive = true;
@@ -113,9 +134,9 @@ function DetailPage() {
     }).catch((reason: unknown) => { if (alive) setError(reason instanceof Error ? reason.message : '无法读取新闻详情'); });
     return () => { alive = false; };
   }, [id]);
-  if (error) return <section className="content-area"><button className="back-link" onClick={() => navigate(-1)}>← 返回</button><div className="error-panel"><b>详情加载失败</b><span>{error}</span></div></section>;
+  if (error) return <section className="content-area"><button className="back-link" onClick={returnToList}>← 返回</button><div className="error-panel"><b>详情加载失败</b><span>{error}</span></div></section>;
   if (!article || !analysis) return <div className="loading-state"><span className="spinner"/> 正在加载详情…</div>;
-  return <section className="content-area detail-page"><button className="back-link" onClick={() => navigate(-1)}>← 返回列表</button>
+  return <section className="content-area detail-page"><button className="back-link" onClick={returnToList}>← 返回列表</button>
     <div className="detail-header"><div className="card-kicker"><span className="source-name">{article.source.name}</span><span className="separator">·</span><time>{fullTime(article.publishedAt ?? article.firstSeenAt)}</time>{article.categories.map((item) => <span key={item.id} className="tag">{item.name}</span>)}</div><h1>{article.title}</h1>{article.url && <a className="original-link" href={article.url} target="_blank" rel="noreferrer">查看原文 ↗</a>}</div>
     <div className="detail-grid"><article className="analysis-panel"><div className="section-title"><span className="sparkle">✳</span><div><b>AI 情报分析</b><small>采集后后台生成 · 非实时推理</small></div><span className={`analysis-badge status-${analysis.status}`}><span/>{statusLabel(analysis.status)}</span></div>
       {analysis.status === 'completed' ? <>
@@ -134,13 +155,18 @@ function AnalysisList({ title, items = [] }: { title: string; items?: string[] }
   return <section className="analysis-section"><h3>{title}</h3><ul>{items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}</ul></section>;
 }
 
-function StatusPage({ status, onRefresh }: { status: SystemStatus | null; onRefresh: () => void }) {
+function StatusPage({ status, health, onRefresh }: { status: SystemStatus | null; health: HealthStatus; onRefresh: () => void }) {
+  useEffect(() => { onRefresh(); }, [onRefresh]);
+  const apiHealthLabel = health.api === 'reachable' ? 'API 可达' : health.api === 'unreachable' ? 'API 不可达' : '检查中';
+  const databaseHealthLabel = health.database === 'ok' ? 'PostgreSQL 正常' : health.database === 'unavailable' ? 'PostgreSQL 不可用' : health.database === 'unknown' ? '状态未知' : '检查中';
   return <section className="content-area status-page"><div className="page-heading"><div><div className="eyebrow">SYSTEM MONITOR</div><h1>采集状态</h1><p>查看最近一次采集、AI 分析与数据库状态。</p></div><button className="refresh-button" onClick={onRefresh}>↻ 刷新</button></div>
-    {!status ? <div className="error-panel"><b>系统状态不可用</b><span>无法连接后端 API 或 PostgreSQL。</span></div> : <>
-      <div className="status-cards"><div className="metric-card"><span>数据库</span><b className="healthy"><i/> PostgreSQL 正常</b><small>业务数据持久化存储</small></div><div className="metric-card"><span>新闻总量</span><b>{status.articleCount.toLocaleString()} <small>条</small></b><small>最新更新 {fullTime(status.latestArticleAt)}</small></div><div className="metric-card"><span>最近采集</span><b className="run-status">{status.latestRun ? runLabel(status.latestRun.status) : '尚无记录'}</b><small>{fullTime(status.latestRun?.startedAt)}</small></div></div>
-      {status.latestRun ? <div className="run-card"><div className="run-card-head"><div><div className="eyebrow">LATEST INGESTION RUN</div><h2>最近任务详情</h2></div><span className={`run-pill run-${status.latestRun.status}`}>{runLabel(status.latestRun.status)}</span></div><div className="run-stats"><div><b>{status.latestRun.articleCount}</b><span>处理新闻</span></div><div><b>{status.latestRun.insertedCount}</b><span>新入库</span></div><div><b>{status.latestRun.updatedCount}</b><span>更新去重</span></div><div><b>{status.latestRun.analysisSucceeded}</b><span>AI 成功</span></div><div><b>{status.latestRun.analysisFailed}</b><span>AI 失败</span></div></div>{status.latestRun.errorSummary && <div className="run-warning">{status.latestRun.errorSummary}</div>}</div> : <div className="empty-state"><b>还没有采集运行记录</b><span>配置并运行 TrendRadar 采集适配后，这里会显示任务状态。</span></div>}
-    </>}
+    <div className="status-cards"><HealthCard label="Backend API" value={apiHealthLabel} healthy={health.api === 'reachable'} pending={health.api === 'checking'} detail="由 /api/v1/health 实时检查可达性"/><HealthCard label="PostgreSQL" value={databaseHealthLabel} healthy={health.database === 'ok'} pending={health.database === 'checking' || health.database === 'unknown'} detail="数据库健康状态与 API 可达性分开显示"/>{status ? <><div className="metric-card"><span>新闻总量</span><b>{status.articleCount.toLocaleString()} <small>条</small></b><small>最新更新 {fullTime(status.latestArticleAt)}</small></div><div className="metric-card"><span>最近采集</span><b className="run-status">{status.latestRun ? runLabel(status.latestRun.status) : '尚无记录'}</b><small>{fullTime(status.latestRun?.startedAt)}</small></div></> : <div className="metric-card"><span>采集状态</span><b className="health-pending">暂不可用</b><small>任务状态请求失败</small></div>}</div>
+    {!status ? <div className="error-panel"><b>系统状态不可用</b><span>无法读取采集任务状态；请结合上方 API 与数据库健康卡检查。</span></div> : status.latestRun ? <div className="run-card"><div className="run-card-head"><div><div className="eyebrow">LATEST INGESTION RUN</div><h2>最近任务详情</h2></div><span className={`run-pill run-${status.latestRun.status}`}>{runLabel(status.latestRun.status)}</span></div><div className="run-stats"><div><b>{status.latestRun.articleCount}</b><span>处理新闻</span></div><div><b>{status.latestRun.insertedCount}</b><span>新入库</span></div><div><b>{status.latestRun.updatedCount}</b><span>更新去重</span></div><div><b>{status.latestRun.analysisSucceeded}</b><span>AI 成功</span></div><div><b>{status.latestRun.analysisFailed}</b><span>AI 失败</span></div></div>{status.latestRun.errorSummary && <div className="run-warning">{status.latestRun.errorSummary}</div>}</div> : <div className="empty-state"><b>还没有采集运行记录</b><span>配置并运行 TrendRadar 采集适配后，这里会显示任务状态。</span></div>}
   </section>;
+}
+
+function HealthCard({ label, value, healthy, pending, detail }: { label: string; value: string; healthy: boolean; pending: boolean; detail: string }) {
+  return <div className="metric-card"><span>{label}</span><b className={healthy ? 'healthy' : pending ? 'health-pending' : 'health-unavailable'}>{healthy && <i/>}{value}</b><small>{detail}</small></div>;
 }
 
 function runLabel(status: string) { return ({ completed: '已完成', partial: '部分完成', failed: '失败', running: '运行中' })[status] ?? status; }
