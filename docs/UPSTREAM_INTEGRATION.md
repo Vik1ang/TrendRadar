@@ -32,7 +32,7 @@
 
 推荐在原版 crawl 和 SQLite save 成功后、HTML/通知收尾附近调用独立 adapter。adapter 输入 `NewsData`/`RSSData`，先 idempotent upsert article + source + classification，再执行每篇 analysis，最后独立更新 analysis 记录及 run 计数。原版 `__main__.py` 只保留少量 hook/调用；批量报告分析仍按原来配置运行。数据库暂时不可用时，不阻止已有 SQLite、HTML、通知；恢复后可用 `python -m trendradar.intelligence.backfill --days N` 从 SQLite 受控补导，默认不调用模型；`--analyze` 才会重新分析。模型失败不丢 article，记录可重试状态；已完成的相同模型/prompt 版本跳过。
 
-需要实际实测其“采集后”挂载位置与原版 once/cron 调度，不把报告分析误认为后台逐篇分析。默认配置 `AI_ANALYSIS` 只有启用后才进行报告分析；本地未提供模型 Key 时无法完成真实 AI 验收。数据源 RSS summary 可持久化，非 RSS 原文不得因链接可达就自动全文抓取/长期保存。
+需要实际实测其“采集后”挂载位置与原版 once/cron 调度，不把报告分析误认为后台逐篇分析。现已完成一条真实标题级逐篇生成；TrendRadar 定时采集自动触发到批量逐篇分析仍未在现有运行容器启用/验收。数据源 RSS summary 可持久化，非 RSS 原文不得因链接可达就自动全文抓取/长期保存。
 
 ## Orca Relay 可用性
 
@@ -53,5 +53,6 @@
 - 本轮再次用临时 PostgreSQL 16 空库执行 `npm run migrate:dev` 两次：首次应用 `001_initial.sql`，第二次无重复执行；SQL 核验 7 张关系表、4 个默认分类、2 个 `pg_trgm` 索引、1 条 migration 记录。测试容器在结束时删除，未使用当前 LAN 验收库。
 - `docker compose -p trendradar-intelligence-p1test ... up --build --wait` 启动 PostgreSQL、read API、private ingest API 成功，均 healthy；PostgreSQL 和 ingest API 都无 host port publish；随后清理该临时项目和测试 volume。既有 `trendradar` 与 `trendradar-mcp` 容器仍在运行。
 - P2/P3 临时 PostgreSQL/Web Compose 使用真实 `DataFetcher.crawl_websites` NewsNow 百度热搜采集 30 条，经新 Python normalizer 和 internal ingestion 入库；Web 同源反代验证 30 条列表、当日日期筛选 30 条、动态新闻标题子串搜索 1 条、4 类分类、详情、`not_requested` 分析和最近 run；直接 API 未授权 401，公开写路由 404，浏览器 bundle 无业务 tokens。模型调用明确关闭，这不是模型实际生成分析的证据。
+- 2026-10-21 按用户指示，使用当前 TrendRadar 容器已有模型配置，对验收库中一条真实 DeepSeek 新闻通过 `run_intelligence_pipeline` 做一次模型生成（`NUM_RETRIES=0`、per-run 上限 1）。第一次测试 runner 仅在 `internal` DB network，模型 `/models` 连通性失败并记录 `MODEL_REQUEST_FAILED`；runner 改为同时加入 TrendRadar 的出站网络及 private ingestion network 后，`/models` HTTP 200、57 项，另一次单篇生成成功。分析更新同一新闻稳定 ID，PostgreSQL run 为 `completed` / analysisSucceeded=1 / analysisFailed=0；Fastify 查询为 completed 且 AI/社会分类已持久化。该条只有标题，分析字段严格标为 `evidenceScope=title` 并列出未确认事项。未在原有 TrendRadar/MCP 容器中运行生成，临时 runner 停止并自动清理；未批量分析或自动启用生产采集。
 - Python `uv run --locked pytest -q`: 33 passed + 9 subtests；`ruff check trendradar/intelligence` 和 `mypy trendradar/intelligence` 通过。全仓库 `ruff check .` 当前失败（2,161 项既有告警，主要在未改动的 TrendRadar/`docker/manage.py` 代码），未为此改动上游核心。Web build/typecheck/lint 通过、Vitest 2 项通过。
 - 临时测试端口仅绑定 loopback；测试 volume/服务已删除。现有 TrendRadar/MCP 容器没有重启或变更。
