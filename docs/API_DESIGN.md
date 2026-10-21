@@ -4,8 +4,8 @@
 
 ## 认证和错误
 
-- `/api/v1/health` 返回 `200`（API 可用、DB ready）或 `503`（DB 不可用），不返回连接串/密钥。
-- 其他只读业务路由使用可配置 Bearer `API_READ_TOKEN`；同源 Web 由反向代理安全注入/转发，浏览器配置不写入长期秘密。单用户 LAN 不是公开认证边界。
+- `/api/v1/health` 返回 `200`（API 可用、DB ready）或 `503`（DB 不可用），字段包含稳定 `service: "trendradar-intelligence"` 服务身份，不返回连接串/密钥。客户端须同时验证预配置 TLS 主机身份和该预期服务标识；该标识不能单独作为身份凭据。
+- 其他只读业务路由使用 Bearer `API_READ_TOKEN`；同源 Web 由反向代理安全注入/转发，浏览器配置不写入长期秘密。启用 Relay 时 Worker `CLIENT_API_TOKEN` 必须与后端 `API_READ_TOKEN` 同值，Agent 转发客户端原始 Authorization，后端再次校验，不信任客户端自报角色/身份头。Agent 另持有独立机器级 `RELAY_AGENT_TOKEN`。现有用户令牌为单用户静态凭据，暂不支持到期/设备级撤销；发布 iOS 前必须补足凭据生命周期或明确安全轮换方案。单用户 LAN 不是公开认证边界。
 - `POST /api/v1/internal/ingestion` 由独立 `ingest-api:3002` listener 提供，只加入 Compose internal network，不发布主机端口；要求独立 `INGEST_TOKEN`。它不注册在公开 Fastify API listener，也不能进入 Cloudflare Relay 路径表。仅 TrendRadar 可信容器调用。
 - 错误结构：`{"error":{"code":"VALIDATION_ERROR","message":"...","details":[]},"requestId":"..."}`。稳定码包含 `UNAUTHORIZED`、`NOT_FOUND`、`VALIDATION_ERROR`、`DATABASE_UNAVAILABLE`、`INTERNAL_ERROR`；不暴露堆栈/SQL。
 

@@ -81,7 +81,6 @@ services:
     environment:
       RELAY_WORKER_URL: ${RELAY_WORKER_URL:-}
       RELAY_AGENT_TOKEN: ${RELAY_AGENT_TOKEN:-}
-      API_READ_TOKEN: ${API_READ_TOKEN:?Set API_READ_TOKEN in .env}
       LOCAL_API_ORIGIN: http://api:3001
       PROXY_URL: ${RELAY_PROXY_URL:-}
     extra_hosts:

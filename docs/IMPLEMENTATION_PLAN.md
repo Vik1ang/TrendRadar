@@ -47,11 +47,15 @@
 
 2026-10-21 P3 缺陷修复：BUG-01 根因在统一筛选更新函数无条件删除 `offset`，分页 handler 虽设置下一页 offset、随后立即把它清除；修复为分页变更保留 offset、其他筛选变更重置页码，详情返回显式携带原列表 URL 状态。BUG-02 原 Web 完全未请求既有 `/api/v1/health`；现在区分 Backend API 可达与 PostgreSQL 状态，进入状态页及手动刷新时重试，检查期间先离开绿色状态，网络失败显示不可达；任务 run 的 `partial` 与 errorSummary/deferred/source failure 原样保留。开发验证后仅更新独立 LAN 验收 Compose 的 Web 容器，未重建/重启 API、ingest、PostgreSQL 或原版 TrendRadar/MCP；需 Mac mini 再做真实 Edge/Playwright 页面回归，特别是按钮点击、回退、最后一页。
 
-## P4 — Cloudflare Relay（P3 通过后）
+P3 最终验收（2026-10-21）：用户报告 Mac mini 使用真实 Microsoft Edge + Playwright 验收为 PASS；BUG-01/BUG-02、列表/组合筛选分页、详情返回状态、预生成分析均通过，Console/Page Error/失败请求未观察到。修复提交 `0ba09e6`。验收报告按用户提供路径记录为 `trendradar-p3-acceptance/P3_FINAL_REGRESSION_REPORT.md`（当前 Linux 工作树中该目录/报告及截图不可读取，故本次仅采信用户提供结论，不声称复核原始证据）。API/数据库故障注入未执行，不属于此 PASS 范围。
 
-先审查实际 Orca 源码副本；当前 Linux 找到的 `/home/zwq/.orca-relay` 不是项目源码。若未拿到副本则单独设计新协议，不声称复用。Worker/DO/Node Agent 独立配置及认证；只读路由 allowlist、请求 ID/超时/大小限制、WSS/代理/重连测试。部署必须用实际 Cloudflare 凭据和真实 WSS 请求验证，不以 mock 代替。免费额度/费用与 Workers、DO 现行官方计划核验后记录，不擅自升级计划。
+## P4 — Cloudflare Relay + LAN Direct（P3 通过后）
 
-实现状态（2026-10-20）：Worker/SQLite DO + Node Agent 已添加；`wrangler deploy --dry-run`、Worker typecheck/3 tests、Agent build/protocol test、Agent production dependency audit 通过。Worker 仅 10ms CPU cap，使用 DO Hibernation API、分离 client/agent/backend tokens、GET allowlist、request ID 乱序关联、20s timeout、32 并发/1MB响应限制。官方额度/计划与部署步骤记录于 `docs/RELAY.md`。尚未实际部署/测试外网 WSS：缺少 Cloudflare credentials/account grant、代理和公司出站授权；不得声称 P4 验收通过。
+架构补充：未来 iOS 在公司内优先直连有效 HTTPS 的 LAN API，外网使用 Worker → SQLite DO → Relay Agent → 同一 Fastify API；Web 始终内网直连。无第二 API/数据库或 D1。P4 阶段不创建 SwiftUI 项目。
+
+P4-0 审查结论（2026-10-21）：Relay 草稿 Worker/DO、Agent、allowlist、相关测试、独立 Compose profile 已存在；已修补 session ready/stale-close、透传同一客户端 Bearer 至 Fastify、Agent Bearer/固定目标验证、重定向拒绝和重复 query 限制。Orca 检查仅发现 `/home/zwq/.orca-relay` 的本机 shell 启动/状态工具，不含源码仓库；借鉴主动连接的架构经验但未复用原始源码。生成物 `node_modules/`、`dist/`、`.wrangler/`、缓存与凭据不入版本控制。详见 `docs/RELAY.md`。
+
+当前阶段阻塞：`wrangler whoami` 显示未认证；当前宿主机代理虽能访问 Cloudflare HTTPS，但 Relay Docker 网络访问宿主机 gateway/代理超时。没有 Cloudflare 授权和 Docker 可达的获批代理，不能验证真实 WSS、公网 API、代理恢复、连续运行或免费额度 Dashboard。LAN HTTPS 仍缺已有域名/DNS-01 权限/证书与 TLS 入口配置。P4 不能标记完成或进入 iOS。
 
 ## P5 — 集成交付
 

@@ -17,7 +17,8 @@ Python intelligence adapter ── private import endpoint / adapter ──► P
 React Web ── Nginx same-origin /api/v1 ──► Fastify read API (route → service → repository)
 TrendRadar container ── private network / ingest token ──► ingestion API ──► PostgreSQL
 
-Future only, after P3: iOS → Worker → Durable Object ↔ Relay Agent → read-only Fastify API
+Future only, after P3: iOS ── LAN HTTPS Direct ───────────────────────────► Fastify API
+                         └─ external: Worker → SQLite DO ↔ Relay Agent ─► same Fastify API
 ```
 
 ## 现有代码边界及复用
@@ -47,8 +48,8 @@ trendradar/intelligence/            # P2 适配、标准化和逐篇分析
 
 - URL 规范化后哈希形成稳定 article ID；URL 缺失时使用来源 ID + 规范化标题作为有限降级身份。数据库唯一约束配合 upsert 防重复。
 - 每次采集/导入有 run 状态；文章内容导入和关联分类使用事务。模型失败不回滚文章，状态设为 `failed` 并可后台重试；成功的相同 prompt/model 版本不重复请求。
-- API 参数采用运行时 schema 校验；统一分页、ISO 8601 UTC 时间和错误 envelope。读 API 可配置 Bearer token；health 仅暴露 liveness/readiness，不含密钥。私有导入接口单独凭据并仅内网可达。
-- Relay 实现已添加但尚无外网验收；仅允许 GET 文章/分类/来源/搜索/health 路由，不能转发写入或任意目标 URL。
+- API 参数采用运行时 schema 校验；统一分页、ISO 8601 UTC 时间和错误 envelope。当前单用户读 API 使用静态 Bearer `API_READ_TOKEN`；若启用 Relay，Worker 的 `CLIENT_API_TOKEN` 必须与它是同一用户令牌，Agent 只持有独立机器级 `RELAY_AGENT_TOKEN`，转发原始客户端 Authorization，Fastify 最终校验。该静态令牌没有 TTL/设备撤销能力，必须在未来上线前补上短期/可撤销凭据或轮换/撤销流程。health 增加稳定 `service: trendradar-intelligence` 标识用于和 TLS host 一起验证服务；标识自身不是安全凭据。私有导入接口单独凭据并仅内网可达。
+- Relay 实现已添加但尚无外网验收；仅允许 GET 文章/分类/来源/搜索/health 路由，不能转发写入或任意目标 URL。Web 不经 Relay。未来 iOS 的 LAN Endpoint 必须是有效、受信任的 HTTPS 域名，不可使用 Web 的 `192.168.2.117:8081` 明文入口作为认证 API。
 - 不引入 Redis、消息队列、搜索服务或托管设施。PostgreSQL `pg_trgm` 中文标题/摘要检索是否启用需以真实中文样本验收，不能以英文全文分词能力替代证据。
 
 ## 部署拓扑

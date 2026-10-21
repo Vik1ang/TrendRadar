@@ -27,7 +27,7 @@ describe('Fastify API boundary', () => {
     const app = await createTestApp();
     const response = await app.inject({ method: 'GET', url: '/api/v1/health' });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: 'ok', database: 'ok' });
+    expect(response.json()).toEqual({ status: 'ok', database: 'ok', service: 'trendradar-intelligence' });
   });
 
   it('reports database unavailability from health without leaking database errors', async () => {
@@ -38,7 +38,7 @@ describe('Fastify API boundary', () => {
     const app = await createTestApp(fakePool);
     const response = await app.inject({ method: 'GET', url: '/api/v1/health' });
     expect(response.statusCode).toBe(503);
-    expect(response.json()).toEqual({ status: 'error', database: 'unavailable' });
+    expect(response.json()).toEqual({ status: 'error', database: 'unavailable', service: 'trendradar-intelligence' });
     expect(response.body).not.toContain('private connection detail');
   });
 
