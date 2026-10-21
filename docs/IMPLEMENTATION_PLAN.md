@@ -30,6 +30,8 @@
 
 状态（2026-10-20 至 2026-10-21）：`trendradar/intelligence/` adapter 和提示词已实现；复用现有 NewsNow/RSS 数据结构及 LiteLLM `AIClient`；新增 URL 规范化与稳定 UUID、历史首次采集时间保留、文章级结构化 JSON 校验、先存文章后分析、按模型/Prompt 版本请求候选文章、失败记录/重试窗口。新增 SQLite 受控补导命令 `python -m trendradar.intelligence.backfill --days N`（范围 1–90，默认跳过 AI；显式 `--analyze` 才调用模型），PostgreSQL 恢复后可用原始 SQLite 记录补入；通过隔离 PostgreSQL + 实际 TrendRadar LocalStorageBackend SQLite 的 Docker 网络端到端验证，补导结果 inserted=1，Fastify 查回 1 条 `not_requested` 新闻。另实际调用 TrendRadar DataFetcher 获取配置中的 11 个 NewsNow 源，共 255 条，经 `run_intelligence_pipeline`→`build_batch`→私有 ingestion API 导入独立 PostgreSQL；首轮 inserted=225/updated=30，重复采集百度源 30 条后 inserted=0/updated=30，文章总数保持 255。此前该批分析开关关闭，状态为 `not_requested`。单篇真实采集标题在隔离 PostgreSQL 中完成错误恢复 E2E：假客户端模拟 provider outage 后，原文保留且 analysis/run 标记 failed/partial；将失败记录推进到重试窗口外后，确定性假响应成功重试，文章 ID 未变，analysis 转 completed，分类写入；该测试不代表真实模型输出，临时 DB/volume 已清理。2026-10-21 按用户指示使用现有 TrendRadar 模型配置 `openai/opencode-go/deepseek-v4.1-flash`，对一条真实采集且仅有标题的 DeepSeek 相关新闻调用一次生成（`NUM_RETRIES=0`、单篇上限）；第一次临时 runner 只连 `internal` 数据网络，无法访问私网模型 endpoint，记录一条 `MODEL_REQUEST_FAILED`。随后 runner 同时连接原 TrendRadar 的可出站网络与私有 ingestion 网络，`/models` 返回 HTTP 200（57 个模型），再次对另一条真实新闻执行一次生成并经真实 `run_intelligence_pipeline` 写入 PostgreSQL：同一稳定文章 ID 更新、run `completed`、`analysisSucceeded=1`、`analysisFailed=0`；Fastify 详情 API 返回 `completed`，分类为 AI/社会，AI 摘要、要点、背景、影响和不确定项均已持久化，`evidenceScope=title`，模型明确指出输入只有标题、不把未提供细节伪装为事实。该单篇真实生成证明模型调用与持久化路径，不代表整批或定时采集自动分析验收。实际 PostgreSQL 关键词查询样本中 `DeepSeek` 命中 5、`英伟达` 命中 2，`国债`、`人工智能`、`大模型`、`AI Agent` 当前样本为 0（不是用空结果冒充关键词匹配）。补充修复空采集不记 ingestion run、部分采集源失败仍报告 completed 的状态问题；新增空采集/部分源失败/模型未配置保留文章/补导范围及 SQLite 日期回放等回归测试。Python 全套 `uv run --locked pytest -q` 33 passed + 9 subtests；新增模块范围检查 `uv run --locked ruff check trendradar/intelligence` 与 `uv run --locked mypy trendradar/intelligence` 通过。全仓库 `ruff check .` 当前失败（2,161 条既有问题主要落在未改动的 TrendRadar/`docker/manage.py` 代码），未对原版核心进行大规模清理。现有 TrendRadar/MCP 容器未触碰，仅启动并清理独立临时 runner。
 
+2026-10-21 自动化闭环受限试跑：用一次性临时 TrendRadar runner 执行与 cron 相同的 `python -m trendradar`（`RUN_MODE=once`）命令，未重启/修改原始 `trendradar` 或 `trendradar-mcp`，并保持模型调用上限 1、顺序执行、`ai.num_retries=0`、无 fallback，关闭旧报告 AI 与通知；采集数据来自当次真实 NewsNow 获取，不分析 255 条历史批次。API `/api/v1/status` 核实最新 run `partial`：1 个来源采集失败；275 篇当次候选中新增 197/更新 78，1 篇真实模型分析成功、0 篇分析失败，274 篇因单次限额延后；数据库文章总数 452，health/database 均为 `ok`。`partial` 符合源失败与限额延迟的预期状态，不把失败藏为成功。临时容器已退出且不存在；容器写入的临时输出目录曾导致宿主侧 `PermissionError`，随后已通过限定到该临时目录的 root 容器完成清理。该试跑证明 cron/once 共用的代码路径可将一次真实采集接入自动分析并持久化，不等同于已启用或观察过生产 cron 周期；当前原服务仍未启用 intelligence flag。试跑后验收 Compose 四个服务均 healthy，原 `trendradar` 与 `trendradar-mcp` 容器仍 Up 且未触碰。
+
 ## P3 — React Web
 
 1. 创建 `web/` React + TypeScript、统一 API client 和路由布局。
@@ -38,6 +40,8 @@
 4. React 核心流程测试、build/typecheck/lint；本机浏览器/HTTP smoke 检查接口与页面刷新。
 
 状态（2026-10-20）：React + TypeScript 工作台、服务端关键词/来源/日期筛选和分页、四频道、新闻详情/分析状态、系统采集状态、错误/空/加载界面、同源 Nginx reverse proxy 和 Docker Web 服务已实现。新闻列表响应新增独立的 `analysisSummary`，来源 `summary` 与后台 AI 摘要分开显示；真实 PostgreSQL→Fastify 冒烟确认两个字段分别返回正确内容。`npm run build/typecheck/lint/test` 通过（2 项 API client 测试）。在独立 LAN 验收 Compose 中，真实 DataFetcher→`run_intelligence_pipeline`→标准 `build_batch`→私有 ingestion API→PostgreSQL→Fastify，11 源共入库 255 条；Web 只绑定服务器 LAN 地址 `192.168.2.117:8081`，API 仅 loopback `127.0.0.1:13001`，DB 和 ingestion 无宿主机端口。通过该 LAN 地址的 HTTP smoke 确认页面、health、真实新闻列表（255 条）、动态标题搜索、四分类、详情、`not_requested` 分析状态、采集状态均正确，未认证的公网写入路径返回 404。完整 Compose restart 后 PostgreSQL、Fastify、ingestion、Web 四服务健康，仍可读取 255 条持久化新闻（不代表宿主机重启验收）。该 LAN Compose 当前保持运行，以便另一台公司 LAN 设备进行最终浏览器/防火墙验收；本机经 LAN 地址的 HTTP 请求仍不等价于从另一台设备实际浏览器访问。未运行 AI 生成调用。
+
+2026-10-21 P3 外部设备验收仍待人工：本机检查确认服务器接口为 `192.168.2.117/24`，Web listener 绑定 `192.168.2.117:8081`，API 只绑定 `127.0.0.1:13001`，PostgreSQL 与 ingest 没有宿主机端口；本轮未用第二台 LAN 设备访问，因此不宣称 LAN 浏览器验收通过。请在同一可信局域网的另一台设备浏览器访问 `http://192.168.2.117:8081`，实际确认首页加载和刷新、四分类筛选、关键词搜索（可试 `DeepSeek`）、新闻详情和已完成的分析展示、系统状态；再报告可访问性/错误。宿主机防火墙及公司 Wi-Fi 客户端隔离/ACL 尚未由当前环境验证。
 
 ## P4 — Cloudflare Relay（P3 通过后）
 
@@ -55,6 +59,6 @@
 
 - `.env.example` 中是示例值；上线前必须替换独立强随机密钥并确认 LAN 防火墙仅允许可信设备访问 Web。
 - 当前缺少 Orca Relay 源码，无法复用历史实现；需要后续用独立凭据自建并测试，不影响 P1-P3。
-- 真实模型生成已对单篇标题级新闻验收并持久化；整批/定时自动分析尚未启用，不能以单篇验收替代批量成本验证。第一次单网 runner 失败并保留错误记录；不应对全部 255 条存量新闻直接启用分析，需先确定批量额度/费用上限。
+- 真实模型生成已对单篇标题级新闻验收并持久化；另外已在一次性 runner 中以“每次最多 1 篇、无重试/无 fallback、顺序执行”真实试跑 `python -m trendradar` 自动采集→分析→数据库闭环，确认 274 条当次候选延后；原生产 cron/TrendRadar 服务的 intelligence 开关仍关闭，未观察 cron 定时触发。不得直接对全部 255 条存量新闻批量分析；生产启用前仍需明确日额度/成本预算、失败重试策略与调度限额，并由运维显式调整部署配置。
 - 未提供 Cloudflare 凭据/代理网络授权，尚未部署 Worker/DO 或做真实 WSS 外网访问；P4 需先核实计划用量和运行成本。
 - 数据库备份/恢复已在临时隔离 PostgreSQL 完成往返演练；仍需在正式部署环境安排例行备份、重启/数据库故障注入、LAN 防火墙及模型失败验收。
