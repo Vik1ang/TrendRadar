@@ -6,6 +6,16 @@
 
 P4-0 草稿审查及本地修补已完成；**P4 真实联通未验收**。当前没有 Cloudflare Wrangler 登录授权（`wrangler whoami` 返回未认证），也没有可从 Docker 网络访问的获批代理；当前容器无法连接宿主机 gateway 上检测到的代理。不能部署 Worker、启动 relay profile 或声称外网请求通过。LAN HTTPS 也未部署：没有确认可用域名、DNS-01 权限、证书及 API TLS reverse proxy。
 
+### 2026-10-21 环境诊断（只读；未部署/未改网络）
+
+- Wrangler `4.151.2`；`npx wrangler whoami` 返回 `You are not authenticated`。因此未检查账户/Workers 列表/计划，无法确认账户当前计划或 `trendradar-intelligence-relay` 名称是否空闲。
+- Linux 宿主机环境配置 HTTP proxy 指向 loopback `10801`；只读 socket 检查发现 Xray 运行于宿主机用户下，`127.0.0.1:10800` 和 wildcard `*:10801` listener。没有读取 Xray 配置文件或凭据。宿主机经该代理访问 `https://www.cloudflare.com/cdn-cgi/trace` 返回 HTTP 200，CONNECT 状态 200。
+- 使用现有 `trendradar-lan-acceptance_intelligence-edge` 网络（`192.168.144.0/20`，gateway `192.168.144.1`）的临时 curl 容器，从 `host.docker.internal`、gateway 及宿主机 LAN 地址访问 proxy listener 都在连接阶段 timeout；外部 API 容器间访问未受影响。当前观察到的症状符合宿主机防火墙/DOCKER-USER 入站过滤或 Xray 入站 ACL 拒绝 Docker bridge 来源，但无法定因：当前 shell 非 root，不能读取完整 nft/iptables/UFW 状态。未改 firewall、Xray、网络策略，也未用 host network。
+- 同一宿主机通过配置代理连接 `wss://ws.postman-echo.com/raw`，WebSocket Upgrade 成功；证明此代理路线支持 CONNECT + WSS 握手，不代表 Docker 内可达或 TrendRadar Cloudflare Worker 的真实 WSS 已通过。公司网络对该 Relay 用途的正式授权无法从主机配置推断，仍需网络所有者确认。
+- Relay Agent/TrendRadar/MCP 服务均未启动/重启；Worker 未部署。LAN Web、API、ingest、PostgreSQL 仍 healthy。
+
+当前最小解除方案（需账户/网络管理员授权，未执行）：先用账户所有者在 Dashboard 确认 Worker 名称未被占用并确认 Workers Free；建议所有者在 UI 创建独立 Worker 后，只对该 Worker 授予 API Token `Editor`，避免把 Workers Admin 账号级权限交给部署流程。若需由 CLI 创建 Worker，Cloudflare 官方要求 product-level Workers `Admin`；这比本项目部署所需范围更广，不应长期保留。网络侧优先给 Relay Agent 一个独立、仅它可达的代理容器/受控 Docker ingress；若复用宿主 Xray，则由管理员先审查并设置仅固定 Relay Agent 来源 → proxy 端口的防火墙 allowlist，且确认 wildcard listener 的 LAN 访问边界。不可以直接开放给整个 LAN、改 host network 或绕过策略。
+
 `/home/zwq/.orca-relay` 检查结果仅为本机 shell 启动/状态工具，不是源码 Git 仓库，没有 Worker/DO/Bridge Agent 协议可复用。故本实现借鉴主动反向连接的架构思路，不复用或修改 Orca Relay。
 
 ## 模块与协议

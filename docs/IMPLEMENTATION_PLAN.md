@@ -57,6 +57,8 @@ P4-0 审查结论（2026-10-21）：Relay 草稿 Worker/DO、Agent、allowlist�
 
 当前阶段阻塞：`wrangler whoami` 显示未认证；当前宿主机代理虽能访问 Cloudflare HTTPS，但 Relay Docker 网络访问宿主机 gateway/代理超时。没有 Cloudflare 授权和 Docker 可达的获批代理，不能验证真实 WSS、公网 API、代理恢复、连续运行或免费额度 Dashboard。LAN HTTPS 仍缺已有域名/DNS-01 权限/证书与 TLS 入口配置。P4 不能标记完成或进入 iOS。
 
+2026-10-21 阻塞复核：Wrangler `4.151.2`、无认证；Worker/DO Free SQLite 配置仍仅本地 dry-run。宿主 Xray listener/代理 HTTPS CONNECT=200；同一 Docker edge 网络到 gateway 与宿主代理连接 timeout。宿主机代理路线上的公共 WSS echo handshake 成功，但不是 Cloudflare Worker 链路，也不证明 Docker 连通。见 `docs/RELAY.md` 环境诊断及最小授权方案。Cloudflare account/Worker 冲突状态未知，未部署、未改 firewall/Xray、未启动 Agent。待账户持有人创建/确认独立 Worker 并授予 per-Worker Editor token；待网络所有者批准固定 Agent→代理出口策略或提供受控 sidecar proxy。
+
 ## P5 — 集成交付
 
 完善 `.env.example`、Compose、运行/停止、迁移、日志、备份恢复、代理和 iOS 交接文档；故障场景逐项测试。P4 若凭据或网络授权不足，不阻止 P1-P3 完成，但须显式保留外网验证 blocker。
