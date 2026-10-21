@@ -1,5 +1,4 @@
 import { createServer } from 'node:http';
-import { HttpProxyAgent } from 'http-proxy-agent';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import WebSocket from 'ws';
@@ -31,7 +30,8 @@ function configFromEnv(): AgentConfig {
 function proxyAgent(proxy: URL | undefined): WebSocket.ClientOptions['agent'] {
   if (!proxy) return undefined;
   if (proxy.protocol.startsWith('socks')) return new SocksProxyAgent(proxy);
-  if (proxy.protocol === 'http:') return new HttpProxyAgent(proxy);
+  // The Relay connection is always WSS. HTTP(S) proxies must tunnel TLS with
+  // CONNECT, including when the proxy itself uses a plain HTTP URL.
   return new HttpsProxyAgent(proxy);
 }
 
