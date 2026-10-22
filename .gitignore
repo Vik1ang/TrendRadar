@@ -7,6 +7,7 @@ web/dist/
 web/tsconfig.tsbuildinfo
 relay-agent/dist/
 cloudflare/worker/.wrangler/
+.wrangler/
 cloudflare/worker/.dev.vars
 backups/
 __pycache__/
