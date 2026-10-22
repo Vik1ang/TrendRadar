@@ -23,6 +23,31 @@ afterEach(async () => {
 });
 
 describe('private ingestion API', () => {
+  const baseArticle = (id: string) => ({
+    id,
+    sourceId: 'rss:test',
+    title: 'Test article',
+    url: 'https://example.com/article',
+    normalizedUrl: 'https://example.com/article',
+    dedupeKey: `sha256:${id}`,
+    firstSeenAt: '2026-10-20T00:00:00Z',
+    contentStatus: 'title_only' as const,
+    analysisStatus: 'not_requested' as const,
+    categories: [],
+  });
+
+  const ingestionPayload = (articles: ReturnType<typeof baseArticle>[]) => ({
+    run: {
+      id: '22222222-2222-4222-8222-222222222222',
+      startedAt: '2026-10-20T00:00:00Z',
+      finishedAt: '2026-10-20T00:01:00Z',
+      status: 'completed' as const,
+      sourceCount: 1,
+    },
+    sources: [{ id: 'rss:test', name: 'Test RSS', type: 'rss' as const }],
+    articles,
+  });
+
   it('requires the independent ingestion credential', async () => {
     const app = await createTestApp();
     const response = await app.inject({
@@ -41,6 +66,65 @@ describe('private ingestion API', () => {
     const response = await app.inject({ method: 'POST', url: '/api/v1/internal/ingestion', payload: {} });
     expect(response.statusCode).toBe(400);
     expect(response.json().error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('accepts valid, null, and omitted publication times in one atomic batch', async () => {
+    const insertedValues: unknown[][] = [];
+    let connectCount = 0;
+    const fakeClient = {
+      query: async (sql: string, values?: unknown[]) => {
+        if (sql.includes('INSERT INTO articles')) {
+          insertedValues.push(values ?? []);
+          return { rows: [{ id: values?.[0], inserted: true }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 1 };
+      },
+      release: () => undefined,
+    };
+    const pool = {
+      query: async () => ({ rows: [{ '?column?': 1 }], rowCount: 1 }),
+      connect: async () => { connectCount += 1; return fakeClient; },
+    } as unknown as Pool;
+    const app = await createTestApp(pool);
+    const valid = { ...baseArticle('11111111-1111-4111-8111-111111111111'), publishedAt: '2026-10-20T08:30:00Z' };
+    const unknown = {
+      ...baseArticle('11111111-1111-4111-8111-111111111112'),
+      summary: null,
+      publishedAt: null,
+    };
+    const omitted = baseArticle('11111111-1111-4111-8111-111111111113');
+    const response = await app.inject({
+      method: 'POST', url: '/api/v1/internal/ingestion',
+      headers: { authorization: 'Bearer ingest-test-token' },
+      payload: ingestionPayload([valid, unknown, omitted]),
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(connectCount).toBe(1);
+    expect(insertedValues).toHaveLength(3);
+    expect(insertedValues.map((values) => values[7])).toEqual([
+      '2026-10-20T08:30:00Z', null, null,
+    ]);
+    expect(insertedValues[1]?.[6]).toBeNull();
+  });
+
+  it('rejects invalid publication times before opening a transaction', async () => {
+    let connectCount = 0;
+    const pool = {
+      query: async () => ({ rows: [{ '?column?': 1 }], rowCount: 1 }),
+      connect: async () => { connectCount += 1; throw new Error('invalid batch must not write'); },
+    } as unknown as Pool;
+    const app = await createTestApp(pool);
+    const invalid = { ...baseArticle('11111111-1111-4111-8111-111111111114'), publishedAt: 'not-a-date' };
+    const response = await app.inject({
+      method: 'POST', url: '/api/v1/internal/ingestion',
+      headers: { authorization: 'Bearer ingest-test-token' },
+      payload: ingestionPayload([baseArticle('11111111-1111-4111-8111-111111111115'), invalid]),
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe('VALIDATION_ERROR');
+    expect(connectCount).toBe(0);
   });
 
   it('returns a structured 400 for malformed JSON imports', async () => {

@@ -23,8 +23,8 @@ export type ArticleInput = {
   url?: string;
   normalizedUrl?: string;
   dedupeKey: string;
-  summary?: string;
-  publishedAt?: string;
+  summary?: string | null;
+  publishedAt?: string | null;
   firstSeenAt: string;
   contentStatus: 'title_only' | 'summary_available' | 'content_available';
   analysisStatus: 'pending' | 'processing' | 'completed' | 'failed' | 'not_requested';

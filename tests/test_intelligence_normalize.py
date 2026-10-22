@@ -49,6 +49,23 @@ def test_build_batch_normalizes_trendradar_hour_dash_minute_timestamps():
     assert _first_seen_at("00-02", "2026-10-22", "14-02", "Asia/Shanghai") == "2026-10-21T16:02:00Z"
 
 
+def test_unknown_rss_published_time_stays_null_without_using_collection_time():
+    rss = RSSData(
+        date="2026-10-20",
+        crawl_time="10:00",
+        items={"feed": [RSSItem(
+            title="Unknown publication time", feed_id="feed", url="https://example.com/a",
+            published_at="", first_time="2026-10-20T09:55:00Z",
+        )]},
+        id_to_name={"feed": "Feed"},
+    )
+
+    _sources, articles = build_batch(None, rss, "Asia/Shanghai")
+
+    assert articles[0]["publishedAt"] is None
+    assert articles[0]["firstSeenAt"] == "2026-10-20T09:55:00Z"
+
+
 def test_build_batch_assigns_baseline_categories_without_ai_analysis():
     news = NewsData(
         date="2026-10-20",
