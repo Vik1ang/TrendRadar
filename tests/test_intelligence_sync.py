@@ -13,9 +13,10 @@ from trendradar.intelligence.stream import ExportedSnapshot
 from trendradar.intelligence.sync import (
     ReadOnlySnapshotStorage,
     sync_exported_snapshots,
+    sync_exported_snapshots_batched,
     sync_latest_once,
 )
-from trendradar.storage.base import NewsData, RSSData
+from trendradar.storage.base import NewsData, NewsItem, RSSData, RSSItem
 
 
 class SnapshotStorage:
@@ -159,3 +160,124 @@ def test_stream_sync_keeps_cursor_when_ingestion_fails_and_records_partial_sourc
     assert result["failedCount"] == 1
     assert metadata["sqliteSync"]["failureCount"] == 1
     assert json.loads(cursor_path.read_text())["news:2026-10-22"]["recordId"] == 9
+
+
+def test_batched_sync_replays_lost_ack_and_advances_cursor_only_after_all_pages(tmp_path: Path) -> None:
+    day1, day2 = "2026-10-21", "2026-10-22"
+    news = ExportedSnapshot(
+        "news", day1, {"recordId": 7, "crawlTime": "23:32", "createdAt": "created"},
+        NewsData(day1, "23:32", {"baidu": [
+            NewsItem(title=f"headline {index}", source_id="baidu", url=f"https://example.com/n/{index}")
+            for index in range(20)
+        ]}),
+        20,
+    )
+    rss = ExportedSnapshot(
+        "rss", day2, {"recordId": 3, "crawlTime": "00:02", "createdAt": "created"},
+        RSSData(day2, "00:02", {"feed": [
+            RSSItem(title=f"feed item {index}", feed_id="feed", url=f"https://example.com/r/{index}")
+            for index in range(20)
+        ]}),
+        20,
+    )
+    snapshots = [news, rss]
+    cursor_path = tmp_path / "state" / "cursors.json"
+    pending_path = cursor_path.with_name("pending-sync.json")
+    calls: list[dict[str, Any]] = []
+    lose_first_ack = True
+
+    class API:
+        def import_batch(self, body: dict[str, Any]) -> dict[str, Any]:
+            nonlocal lose_first_ack
+            calls.append(body)
+            result = {"runId": body["run"]["id"], "insertedCount": len(body["articles"]), "updatedCount": 0}
+            if lose_first_ack:
+                lose_first_ack = False
+                raise RuntimeError("simulated lost response after server commit")
+            return result
+
+    api = cast(IngestionAPI, API())
+    with pytest.raises(RuntimeError, match="lost response"):
+        sync_exported_snapshots_batched(snapshots, api, cursor_path, max_articles=20)
+
+    assert len(calls[0]["articles"]) == 20
+    assert not cursor_path.exists()
+    assert json.loads(pending_path.read_text())["nextIndex"] == 0
+    assert pending_path.stat().st_mode & 0o777 == 0o600
+
+    # A committed batch with a lost response is replayed with the same IDs/run key.
+    first = sync_exported_snapshots_batched(snapshots, api, cursor_path, max_articles=20)
+    assert first["processedCount"] == 20
+    assert first["complete"] is False
+    assert calls[1]["run"]["id"] == calls[0]["run"]["id"]
+    assert [item["id"] for item in calls[1]["articles"]] == [item["id"] for item in calls[0]["articles"]]
+    assert not cursor_path.exists()
+    assert json.loads(pending_path.read_text())["nextIndex"] == 20
+
+    # Live SQLite can advance while the persisted spool safely finishes first.
+    changed_news = ExportedSnapshot(
+        "news", day1, {"recordId": 8, "crawlTime": "23:58", "createdAt": "newer"},
+        NewsData(day1, "23:58", {"baidu": [NewsItem(title="new arrival", source_id="baidu", url="https://example.com/new")]}),
+        1,
+    )
+    second = sync_exported_snapshots_batched([changed_news, rss], api, cursor_path, max_articles=20)
+    assert second["processedCount"] == 20
+    assert second["complete"] is True
+    assert len(calls[2]["articles"]) == 20
+    assert len({item["id"] for item in calls[2]["articles"]}) == 20
+    assert {item["analysisStatus"] for item in calls[2]["articles"]} == {"not_requested"}
+    assert json.loads(cursor_path.read_text()) == {
+        "news:2026-10-21": news.marker,
+        "rss:2026-10-22": rss.marker,
+    }
+    assert not pending_path.exists()
+
+    # Once the old frozen crawl is fully acknowledged, the newer live marker
+    # is exported on the next invocation instead of being skipped.
+    third = sync_exported_snapshots_batched([changed_news, rss], api, cursor_path, max_articles=20)
+    assert third["processedCount"] == 1
+    assert calls[3]["articles"][0]["title"] == "new arrival"
+    assert json.loads(cursor_path.read_text())["news:2026-10-21"] == changed_news.marker
+
+
+def test_batched_sync_refuses_corrupt_pending_state_instead_of_overwriting(tmp_path: Path) -> None:
+    cursor_path = tmp_path / "cursors.json"
+    pending_path = cursor_path.with_name("pending-sync.json")
+    pending_path.write_text("{invalid", encoding="utf-8")
+    snapshot = ExportedSnapshot(
+        "news", "2026-10-22", {"recordId": 1, "crawlTime": "10:00", "createdAt": "created"},
+        NewsData("2026-10-22", "10:00", {"baidu": [NewsItem(title="headline", source_id="baidu")]}), 1,
+    )
+
+    with pytest.raises(RuntimeError, match="unreadable"):
+        sync_exported_snapshots_batched([snapshot], cast(IngestionAPI, object()), cursor_path, max_articles=20)
+    assert pending_path.read_text() == "{invalid"
+
+
+def test_batched_sync_never_exceeds_a_smaller_limit_when_resuming(tmp_path: Path) -> None:
+    day = "2026-10-22"
+    snapshot = ExportedSnapshot(
+        "news", day, {"recordId": 11, "crawlTime": "12:00", "createdAt": "created"},
+        NewsData(day, "12:00", {"baidu": [
+            NewsItem(title=f"story {index}", source_id="baidu", url=f"https://example.com/{index}")
+            for index in range(25)
+        ]}),
+        25,
+    )
+    calls: list[dict[str, Any]] = []
+
+    class API:
+        def import_batch(self, body: dict[str, Any]) -> dict[str, Any]:
+            calls.append(body)
+            return {"runId": body["run"]["id"]}
+
+    api = cast(IngestionAPI, API())
+    cursor_path = tmp_path / "cursors.json"
+    first = sync_exported_snapshots_batched([snapshot], api, cursor_path, max_articles=20)
+    resumed = sync_exported_snapshots_batched([snapshot], api, cursor_path, max_articles=5)
+
+    assert first["processedCount"] == 20
+    assert resumed["processedCount"] == 5
+    assert len(calls[0]["articles"]) == 20
+    assert len(calls[1]["articles"]) == 5
+    assert resumed["complete"] is True

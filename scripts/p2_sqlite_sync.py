@@ -25,7 +25,9 @@ sys.path.insert(0, str(ROOT))
 from trendradar.intelligence.api import IngestionAPI
 from trendradar.intelligence.normalize import build_batch
 from trendradar.intelligence.stream import ExportedSnapshot, parse_export_jsonl
-from trendradar.intelligence.sync import sync_exported_snapshots
+from trendradar.intelligence.sync import (
+    sync_exported_snapshots_batched,
+)
 from trendradar.storage.base import NewsData, RSSData
 
 MAX_EXPORT_BYTES = 16 * 1024 * 1024
@@ -247,13 +249,15 @@ class DockerExecIngestionAPI(IngestionAPI):
         return value
 
 
-def _apply(snapshots: list[ExportedSnapshot]) -> dict[str, Any]:
+def _apply(snapshots: list[ExportedSnapshot], max_articles: int) -> dict[str, Any]:
     _check_migration()
     _check_ai_budget()
     os.environ["INTELLIGENCE_ENABLED"] = "true"
     os.environ["INTELLIGENCE_ANALYSIS_ENABLED"] = "false"
     api = DockerExecIngestionAPI(_ingestion_container())
-    return sync_exported_snapshots(snapshots, api, CURSOR_PATH)
+    return sync_exported_snapshots_batched(
+        snapshots, api, CURSOR_PATH, max_articles=max_articles,
+    )
 
 
 def main() -> int:
@@ -261,7 +265,15 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="write the new snapshot to Intelligence PostgreSQL")
     mode.add_argument("--dry-run", action="store_true", help="read/normalize/compare without PostgreSQL writes")
+    parser.add_argument(
+        "--max-articles", type=int, default=20,
+        help="maximum normalized, deduplicated articles imported per --apply run (default: 20)",
+    )
     args = parser.parse_args()
+    if not 1 <= args.max_articles <= 1000:
+        parser.error("--max-articles must be between 1 and 1000")
+    if "--max-articles" in sys.argv[1:] and not args.apply:
+        parser.error("--max-articles can only be used with --apply")
     STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(STATE_DIR, 0o700)
     lock_path = STATE_DIR / "sync.lock"
@@ -272,11 +284,13 @@ def main() -> int:
         except BlockingIOError:
             print(json.dumps({"mode": "skipped", "reason": "sync_already_running"}))
             return 0
-        snapshots = _export()
         if args.apply:
-            result = _apply(snapshots)
+            pending_path = CURSOR_PATH.with_name("pending-sync.json")
+            snapshots = [] if pending_path.exists() else _export()
+            result = _apply(snapshots, args.max_articles)
             print(json.dumps({"mode": "applied", **result}, ensure_ascii=False, sort_keys=True))
         else:
+            snapshots = _export()
             print(json.dumps(_dry_run(snapshots), ensure_ascii=False, sort_keys=True))
     return 0
 
@@ -284,6 +298,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         print(json.dumps({"mode": "failed", "errorType": type(exc).__name__, "detail": str(exc)[:200]}), file=sys.stderr)
         raise SystemExit(1)
