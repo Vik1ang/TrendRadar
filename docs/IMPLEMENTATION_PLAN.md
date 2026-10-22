@@ -32,6 +32,17 @@
 
 2026-10-21 自动化闭环受限试跑：用一次性临时 TrendRadar runner 执行与 cron 相同的 `python -m trendradar`（`RUN_MODE=once`）命令，未重启/修改原始 `trendradar` 或 `trendradar-mcp`，并保持模型调用上限 1、顺序执行、`ai.num_retries=0`、无 fallback，关闭旧报告 AI 与通知；采集数据来自当次真实 NewsNow 获取，不分析 255 条历史批次。API `/api/v1/status` 核实最新 run `partial`：1 个来源采集失败；275 篇当次候选中新增 197/更新 78，1 篇真实模型分析成功、0 篇分析失败，274 篇因单次限额延后；数据库文章总数 452，health/database 均为 `ok`。`partial` 符合源失败与限额延迟的预期状态，不把失败藏为成功。临时容器已退出且不存在；容器写入的临时输出目录曾导致宿主侧 `PermissionError`，随后已通过限定到该临时目录的 root 容器完成清理。该试跑证明 cron/once 共用的代码路径可将一次真实采集接入自动分析并持久化，不等同于已启用或观察过生产 cron 周期；当前原服务仍未启用 intelligence flag。试跑后验收 Compose 四个服务均 healthy，原 `trendradar` 与 `trendradar-mcp` 容器仍 Up 且未触碰。
 
+### P2 生产自动化预算与启用状态审计（2026-10-22）
+
+- **现有调度器，不新增第二套：** 原版 TrendRadar 容器当前 `RUN_MODE=cron`、`CRON_SCHEDULE=*/30 * * * *`、`IMMEDIATE_RUN=true`。其 `/entrypoint.sh` 使用 Supercronic，未传 `-overlapping`；Supercronic 默认等待同一 job 结束后才启动下一次（上游说明：[aptible/supercronic — Duplicate Jobs](https://github.com/aptible/supercronic#duplicate-jobs)）。
+- **生产 Adapter 目前没有接通：** 正在运行的镜像是 `wantcat/trendradar:latest`，容器内没有 `run_intelligence_pipeline` hook；`INTELLIGENCE_ENABLED`、`INTELLIGENCE_ANALYSIS_ENABLED` 等变量未设置。仓库当前源码已有 crawl 结束后的可选 Adapter hook，但只有在更新/重建并重启原 TrendRadar 容器后才会进入生产调度。本轮按要求没有修改或重启该容器，也没有另外创建 cron/sidecar，因此定时采集仍在跑，PostgreSQL 自动导入/分类/AI 分析仍**未启用**。
+- **现存数据基线（只读）：** PostgreSQL 有 452 篇文章、3 条分类关系（AI 1、财经 1、社会 1、科技 0）、3 条分析记录；分析状态为 completed 2、failed 1、not_requested 175、pending 274。最近一个 ingestion run 是历史 `partial`，记有 274 篇 deferred。现存 452 篇规则分类 dry-run 命中 AI 31、科技 21、财经 19、社会 10，至少命中一个频道 70 篇，382 篇（84.5%）未命中；命中可重叠。该 dry-run 未写回历史。当前日期的本地 SQLite 读取没有热榜或 RSS 记录，最近 TrendRadar 日志尾部仍可见 NewsNow 源 HTTP 500，所以本轮没有伪造“真实增量采集成功”。
+- **本轮代码侧闭环准备：** `002_analysis_queue_and_budget.sql` 为迁移后新插入文章建立待分析队列，不回填旧 452 篇；尝试表记录 run/article/model/Prompt/version、结果与时间。PostgreSQL 事务 advisory lock 原子限制每 run/每日配额和并发；租约、最多重试次数、失败后一小时 backoff 支持隔离和恢复。规则分类在入库时只作用于新增文章，普通重复导入不会覆盖既有分类，只有明确 `replaceCategories` 的成功 AI 结果可替换标签。Python 默认 `INTELLIGENCE_ANALYSIS_ENABLED=false`；Compose 示例的每 run 默认 1、每日默认 0（fail closed）、并发 1、最多尝试 2。已成功的版本不会再次排队；超预算作业保留在数据库队列中。
+- **本轮未启用/未做：** 没有应用新 migration 到生产 PostgreSQL、没有更新/重启 Ingestion API 或原 TrendRadar/MCP，没有调用任何真实模型，没有对 452 篇历史记录写入分类，没有执行生产定时任务，也没有新文章可用于验证真实增量去重。由于受保护 Worker 业务读取本次返回 403，LAN 业务 API 为 200，未能完成当前时点的 Relay 内容一致性检查；未修改 Cloudflare Secret/Relay。
+- **验证：** Backend Vitest 26 项（其中预算/队列测试 5 项）、build、TypeScript typecheck、ESLint 通过；Python 全套 pytest 45 项 + 12 subtests、Adapter/分析/补导相关定向测试 21 项、Ruff 与 mypy 通过。将原 migration 001 与本轮 migration 002 应用于一次性隔离 PostgreSQL，并用实际 repository 完成新增文章→队列→日限额拒绝第二次→分析完成写回的 SQL 往返；临时测试容器已清理。原生产服务容器没有重启。
+- **阶段判断：P2 生产闭环未通过。** 缺少 Adapter 与运行中 Cron 的生产接通、实时增量/分类/去重证据，且 migration/API 代码尚未部署。生产启用还需要经批准安排一次原版 TrendRadar 容器更新/重启（该服务 `IMMEDIATE_RUN=true`，会立即采集一次）；AI 长期预算需要明确每日调用量/费用上限。自动分析保持关闭，不能用单测或历史单篇分析冒充生产定时闭环。
+- 详细检查、测试和待办见 `docs/P2_PRODUCTION_PIPELINE_REPORT.md`。
+
 ## P3 — React Web
 
 1. 创建 `web/` React + TypeScript、统一 API client 和路由布局。

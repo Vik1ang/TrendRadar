@@ -38,24 +38,150 @@ export type IngestionInput = {
   articles: ArticleInput[];
 };
 
-export class IngestionRepository {
-  constructor(private readonly pool: Pool) {}
+export type AnalysisCandidate = {
+  id: string;
+  sourceId: string;
+  sourceName: string;
+  title: string;
+  summary: string | null;
+  categories: Array<{ id: string; confidence?: number; assignedBy: string }>;
+};
 
-  async analysisCandidates(input: { articleIds: string[]; modelName: string; promptVersion: string; analysisVersion: number }): Promise<string[]> {
-    const result = await this.pool.query<{ id: string }>(
-      `SELECT a.id
-         FROM unnest($1::uuid[]) WITH ORDINALITY requested(id, ordinal)
-         JOIN articles a ON a.id = requested.id
-        WHERE NOT EXISTS (
-          SELECT 1 FROM article_analyses aa
-           WHERE aa.article_id = a.id AND aa.model_name = $2 AND aa.prompt_version = $3
-             AND aa.analysis_version = $4
-             AND (aa.status = 'completed' OR (aa.status = 'failed' AND COALESCE(aa.analyzed_at, aa.created_at) > now() - interval '1 hour'))
-        )
-        ORDER BY requested.ordinal`,
-      [input.articleIds, input.modelName, input.promptVersion, input.analysisVersion],
+export type AnalysisBudget = {
+  maxPerRun: number;
+  maxPerDay: number;
+  maxConcurrent: number;
+  maxAttempts: number;
+};
+
+export type AnalysisStart = {
+  runId: string;
+  articleId: string;
+  modelName: string;
+  promptVersion: string;
+  analysisVersion: number;
+};
+
+export type AnalysisStartResult = { started: true } | { started: false; reason: 'DAILY_BUDGET' | 'RUN_BUDGET' | 'CONCURRENCY_LIMIT' | 'NOT_ELIGIBLE' | 'ATTEMPTS_EXHAUSTED' | 'ALREADY_CLAIMED' };
+
+export class IngestionRepository {
+  constructor(
+    private readonly pool: Pool,
+    private readonly budget: AnalysisBudget = { maxPerRun: 1, maxPerDay: 0, maxConcurrent: 1, maxAttempts: 2 },
+  ) {}
+
+  async analysisCandidates(input: { modelName: string; promptVersion: string; analysisVersion: number }): Promise<AnalysisCandidate[]> {
+    const result = await this.pool.query<AnalysisCandidate>(
+      `SELECT a.id, a.source_id AS "sourceId", s.name AS "sourceName", a.title, a.summary,
+              COALESCE(jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id', c.id, 'confidence', ac.confidence, 'assignedBy', ac.assigned_by))
+                ORDER BY c.sort_order) FILTER (WHERE c.id IS NOT NULL), '[]'::jsonb) AS categories
+         FROM article_analysis_jobs j
+         JOIN articles a ON a.id = j.article_id
+         JOIN sources s ON s.id = a.source_id
+         LEFT JOIN article_categories ac ON ac.article_id = a.id
+         LEFT JOIN categories c ON c.id = ac.category_id
+        WHERE j.status <> 'completed'
+          AND j.attempts < $4
+          AND (j.status <> 'processing' OR j.lease_expires_at <= now())
+          AND j.available_at <= now()
+          AND (j.model_name IS NULL OR (j.model_name = $1 AND j.prompt_version = $2 AND j.analysis_version = $3))
+          AND NOT EXISTS (
+            SELECT 1 FROM article_analyses aa
+             WHERE aa.article_id = a.id AND aa.model_name = $1 AND aa.prompt_version = $2
+               AND aa.analysis_version = $3 AND aa.status = 'completed'
+          )
+        GROUP BY a.id, s.name
+        ORDER BY a.first_seen_at, a.id
+        LIMIT 1000`,
+      [input.modelName, input.promptVersion, input.analysisVersion, this.budget.maxAttempts],
     );
-    return result.rows.map((row) => row.id);
+    return result.rows;
+  }
+
+  async startAnalysis(input: AnalysisStart): Promise<AnalysisStartResult> {
+    if (this.budget.maxPerDay === 0) {
+      return { started: false, reason: 'DAILY_BUDGET' };
+    }
+    if (this.budget.maxPerRun === 0) return { started: false, reason: 'RUN_BUDGET' };
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1)', [74129518]);
+      const daily = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM article_analysis_attempts
+          WHERE started_at >= (date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')`,
+      );
+      if (Number(daily.rows[0]?.count ?? 0) >= this.budget.maxPerDay) {
+        await client.query('COMMIT');
+        return { started: false, reason: 'DAILY_BUDGET' };
+      }
+      const runUsage = await client.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM article_analysis_attempts WHERE run_id = $1', [input.runId],
+      );
+      if (Number(runUsage.rows[0]?.count ?? 0) >= this.budget.maxPerRun) {
+        await client.query('COMMIT');
+        return { started: false, reason: 'RUN_BUDGET' };
+      }
+      const active = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM article_analysis_jobs
+          WHERE status = 'processing' AND lease_expires_at > now()`,
+      );
+      if (Number(active.rows[0]?.count ?? 0) >= this.budget.maxConcurrent) {
+        await client.query('COMMIT');
+        return { started: false, reason: 'CONCURRENCY_LIMIT' };
+      }
+      const job = await client.query<{ attempts: number; status: string; available_at: Date; lease_expires_at: Date | null }>(
+        `SELECT attempts, status, available_at, lease_expires_at FROM article_analysis_jobs WHERE article_id = $1 FOR UPDATE`,
+        [input.articleId],
+      );
+      const current = job.rows[0];
+      if (!current || current.status === 'completed' || current.available_at > new Date()) {
+        await client.query('COMMIT');
+        return { started: false, reason: 'NOT_ELIGIBLE' };
+      }
+      if (current.status === 'processing' && current.lease_expires_at && current.lease_expires_at > new Date()) {
+        await client.query('COMMIT');
+        return { started: false, reason: 'NOT_ELIGIBLE' };
+      }
+      if (current.attempts >= this.budget.maxAttempts) {
+        await client.query('COMMIT');
+        return { started: false, reason: 'ATTEMPTS_EXHAUSTED' };
+      }
+      const completed = await client.query(
+        `SELECT 1 FROM article_analyses WHERE article_id = $1 AND model_name = $2
+          AND prompt_version = $3 AND analysis_version = $4 AND status = 'completed' LIMIT 1`,
+        [input.articleId, input.modelName, input.promptVersion, input.analysisVersion],
+      );
+      if (completed.rowCount) {
+        await client.query("UPDATE article_analysis_jobs SET status='completed',lease_expires_at=NULL,updated_at=now() WHERE article_id=$1", [input.articleId]);
+        await client.query('COMMIT');
+        return { started: false, reason: 'NOT_ELIGIBLE' };
+      }
+      const attemptId = randomUUID();
+      const inserted = await client.query(
+        `INSERT INTO article_analysis_attempts(id,run_id,article_id,model_name,prompt_version,analysis_version,status)
+         VALUES ($1,$2,$3,$4,$5,$6,'processing') ON CONFLICT (run_id,article_id,model_name,prompt_version,analysis_version) DO NOTHING
+         RETURNING id`,
+        [attemptId, input.runId, input.articleId, input.modelName, input.promptVersion, input.analysisVersion],
+      );
+      if (!inserted.rowCount) {
+        await client.query('COMMIT');
+        return { started: false, reason: 'ALREADY_CLAIMED' };
+      }
+      await client.query(
+        `UPDATE article_analysis_jobs SET status='processing',attempts=attempts+1,
+           model_name=$2,prompt_version=$3,analysis_version=$4,lease_expires_at=now()+interval '10 minutes',
+           last_error_code=NULL,updated_at=now() WHERE article_id=$1`,
+        [input.articleId, input.modelName, input.promptVersion, input.analysisVersion],
+      );
+      await client.query('COMMIT');
+      return { started: true };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async import(input: IngestionInput): Promise<{ runId: string; articleCount: number; insertedCount: number; updatedCount: number }> {
@@ -98,7 +224,17 @@ export class IngestionRepository {
         if (upserted.inserted) insertedCount += 1;
         else updatedCount += 1;
 
-        if (article.replaceCategories || article.categories.length > 0) {
+        if (upserted.inserted) {
+          await client.query(
+            'INSERT INTO article_analysis_jobs(article_id) VALUES ($1) ON CONFLICT (article_id) DO NOTHING',
+            [persistedId],
+          );
+        }
+
+        // Baseline rules belong to new articles only. Re-imports must not
+        // rewrite the existing 452-article history unless analysis explicitly
+        // returns replaceCategories=true.
+        if (upserted.inserted || article.replaceCategories) {
           await client.query('DELETE FROM article_categories WHERE article_id = $1', [persistedId]);
           for (const category of article.categories) {
             await client.query(
@@ -127,14 +263,29 @@ export class IngestionRepository {
           );
           if (analysis.status === 'completed') analysisSucceeded += 1;
           if (analysis.status === 'failed') analysisFailed += 1;
+          if (analysis.status === 'completed' || analysis.status === 'failed') {
+            await client.query(
+              `UPDATE article_analysis_attempts SET status=$5,error_code=$6,finished_at=COALESCE($7::timestamptz,now())
+                WHERE run_id=$1 AND article_id=$2 AND model_name=$3 AND prompt_version=$4 AND analysis_version=$8 AND status='processing'`,
+              [input.run.id, persistedId, analysis.modelName, analysis.promptVersion, analysis.status, analysis.errorCode ?? null,
+                analysis.analyzedAt ?? null, analysis.analysisVersion],
+            );
+            await client.query(
+              `UPDATE article_analysis_jobs SET status=$2,lease_expires_at=NULL,
+                 available_at=CASE WHEN $2='failed' THEN now()+interval '1 hour' ELSE now() END,
+                 last_error_code=$3,updated_at=now() WHERE article_id=$1`,
+              [persistedId, analysis.status, analysis.errorCode ?? null],
+            );
+          }
         }
+
       }
 
       await client.query(
         `INSERT INTO ingestion_runs(id,started_at,finished_at,status,source_count,article_count,inserted_count,updated_count,analysis_succeeded,analysis_failed,error_summary)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT (id) DO UPDATE SET finished_at=EXCLUDED.finished_at,status=EXCLUDED.status,
-           source_count=EXCLUDED.source_count,article_count=EXCLUDED.article_count,
+           source_count=EXCLUDED.source_count,article_count=GREATEST(ingestion_runs.article_count,EXCLUDED.article_count),
            inserted_count=GREATEST(ingestion_runs.inserted_count,EXCLUDED.inserted_count),
            updated_count=GREATEST(ingestion_runs.updated_count,EXCLUDED.updated_count),
            analysis_succeeded=EXCLUDED.analysis_succeeded,analysis_failed=EXCLUDED.analysis_failed,error_summary=EXCLUDED.error_summary`,

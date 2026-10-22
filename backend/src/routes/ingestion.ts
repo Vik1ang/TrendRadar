@@ -41,19 +41,40 @@ type Body = Static<typeof bodySchema>;
 
 export async function registerIngestionRoutes(app: FastifyInstance, repository: IngestionRepository): Promise<void> {
   const candidates = Type.Object({
-    articleIds: Type.Array(Type.String({ format: 'uuid' }), { maxItems: 1000 }),
     modelName: Type.String({ minLength: 1, maxLength: 160 }),
     promptVersion: Type.String({ minLength: 1, maxLength: 80 }),
     analysisVersion: Type.Integer({ minimum: 1 }),
   });
+  const analysisCandidate = Type.Object({
+    id: Type.String({ format: 'uuid' }), sourceId: Type.String(), sourceName: Type.String(),
+    title: Type.String(), summary: Type.Union([Type.String(), Type.Null()]),
+    categories: Type.Array(Type.Object({
+      id: Type.String(), confidence: Type.Optional(Type.Number()), assignedBy: Type.String(),
+    })),
+  });
   app.post<{ Body: Static<typeof candidates> }>('/api/v1/internal/analysis-candidates', {
     schema: {
       body: candidates,
-      response: { 200: { type: 'object', required: ['articleIds'], properties: { articleIds: { type: 'array', items: { type: 'string', format: 'uuid' } } } } },
-      security: [{ ingestionToken: [] }], tags: ['internal'], summary: 'List articles needing this analysis version',
+      response: { 200: Type.Object({ articles: Type.Array(analysisCandidate) }) },
+      security: [{ ingestionToken: [] }], tags: ['internal'], summary: 'List newly queued articles awaiting bounded analysis',
     },
     preHandler: app.authenticateIngestion,
-  }, async (request) => ({ articleIds: await repository.analysisCandidates(request.body) }));
+  }, async (request) => ({ articles: await repository.analysisCandidates(request.body) }));
+
+  const startAnalysis = Type.Object({
+    runId: Type.String({ format: 'uuid' }),
+    articleId: Type.String({ format: 'uuid' }),
+    modelName: Type.String({ minLength: 1, maxLength: 160 }),
+    promptVersion: Type.String({ minLength: 1, maxLength: 80 }),
+    analysisVersion: Type.Integer({ minimum: 1 }),
+  });
+  app.post<{ Body: Static<typeof startAnalysis> }>('/api/v1/internal/analysis-start', {
+    schema: {
+      body: startAnalysis,
+      security: [{ ingestionToken: [] }], tags: ['internal'], summary: 'Reserve one analysis call within configured budgets',
+    },
+    preHandler: app.authenticateIngestion,
+  }, async (request) => repository.startAnalysis(request.body));
 
   app.post<{ Body: Body }>('/api/v1/internal/ingestion', {
     schema: {

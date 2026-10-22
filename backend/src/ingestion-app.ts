@@ -51,6 +51,11 @@ export async function buildIngestionApp(pool: Pool, config: IngestionConfig): Pr
       return reply.code(503).send({ status: 'error', database: 'unavailable' });
     }
   });
-  await registerIngestionRoutes(app, new IngestionRepository(pool));
+  await registerIngestionRoutes(app, new IngestionRepository(pool, {
+    maxPerRun: config.analysisMaxPerRun,
+    maxPerDay: config.analysisMaxPerDay,
+    maxConcurrent: config.analysisMaxConcurrent,
+    maxAttempts: config.analysisMaxAttempts,
+  }));
   return app;
 }

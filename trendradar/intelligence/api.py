@@ -41,10 +41,17 @@ class IngestionAPI:
     def import_batch(self, body: dict[str, Any]) -> dict[str, Any]:
         return self._post(self.url, body)
 
-    def analysis_candidates(self, body: dict[str, Any]) -> list[str]:
+    def analysis_candidates(self, body: dict[str, Any]) -> list[dict[str, Any]]:
         base = self.url.rsplit("/", 1)[0]
         result = self._post(f"{base}/analysis-candidates", body)
-        article_ids = result.get("articleIds")
-        if not isinstance(article_ids, list) or any(not isinstance(item, str) for item in article_ids):
-            raise IntelligenceAPIError("Ingestion API returned invalid candidate IDs")
-        return article_ids
+        articles = result.get("articles")
+        if not isinstance(articles, list) or any(not isinstance(item, dict) for item in articles):
+            raise IntelligenceAPIError("Ingestion API returned invalid analysis candidates")
+        return articles
+
+    def start_analysis(self, body: dict[str, Any]) -> dict[str, Any]:
+        base = self.url.rsplit("/", 1)[0]
+        result = self._post(f"{base}/analysis-start", body)
+        if not isinstance(result.get("started"), bool):
+            raise IntelligenceAPIError("Ingestion API returned invalid analysis reservation")
+        return result

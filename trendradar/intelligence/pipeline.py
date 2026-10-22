@@ -25,6 +25,14 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _bounded_env_int(name: str, default: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return min(max(value, 0), maximum)
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -86,7 +94,22 @@ def run_intelligence_pipeline(
         }
         return api.import_batch(body)
 
-    ai_enabled = _env_bool("INTELLIGENCE_ANALYSIS_ENABLED", True)
+    # Collection/classification is independent from model use. Both switches
+    # must be explicitly enabled before any production model call can happen.
+    ai_enabled = _env_bool("INTELLIGENCE_ANALYSIS_ENABLED", False)
+    for article in articles:
+        article["analysisStatus"] = "pending" if ai_enabled else "not_requested"
+
+    initial_result = api.import_batch({"run": run, "sources": sources, "articles": articles})
+
+    if not ai_enabled:
+        status = "partial" if failed_sources else "completed"
+        return api.import_batch({
+            "run": _final_run(run, status, crawl_errors),
+            "sources": [],
+            "articles": [],
+        })
+
     ai_config = config.get("AI", {}) if isinstance(config.get("AI", {}), dict) else {}
     model_name = str(ai_config.get("MODEL") or "unconfigured")
     model_valid = False
@@ -97,37 +120,12 @@ def run_intelligence_pipeline(
             client = AIClient(ai_config)
         model_valid, _ = client.validate_config()
 
-    if not ai_enabled:
-        for article in articles:
-            article["analysisStatus"] = "not_requested"
-        status = "partial" if failed_sources else "completed"
-        body = {"run": _final_run(run, status, crawl_errors), "sources": sources, "articles": articles}
-        return api.import_batch(body)
-
     if not model_valid:
-        failed_at = _now()
-        for article in articles:
-            article["analysisStatus"] = "failed"
-            article["analysis"] = {
-                "keyFacts": [], "potentialImpacts": [], "uncertainties": [],
-                "evidenceScope": "summary" if article.get("summary") else "title",
-                "modelName": model_name,
-                "promptVersion": PROMPT_VERSION,
-                "analysisVersion": ANALYSIS_VERSION,
-                "status": "failed",
-                "errorCode": "MODEL_NOT_CONFIGURED",
-                "analyzedAt": failed_at,
-            }
         errors = [error for error in (crawl_errors, "MODEL_NOT_CONFIGURED") if error]
-        body = {"run": _final_run(run, "partial", "; ".join(errors)), "sources": sources, "articles": articles}
-        return api.import_batch(body)
-
-    initial_body = {"run": run, "sources": sources, "articles": articles}
-    initial_result = api.import_batch(initial_body)
+        return api.import_batch({"run": _final_run(run, "partial", "; ".join(errors)), "sources": [], "articles": []})
 
     try:
         candidates = api.analysis_candidates({
-            "articleIds": [article["id"] for article in articles],
             "modelName": model_name,
             "promptVersion": PROMPT_VERSION,
             "analysisVersion": ANALYSIS_VERSION,
@@ -136,30 +134,53 @@ def run_intelligence_pipeline(
         api.import_batch({"run": _final_run(run, "partial", "ANALYSIS_CANDIDATE_LOOKUP_FAILED"), "sources": [], "articles": []})
         raise
 
-    try:
-        max_per_run = max(1, min(int(os.environ.get("INTELLIGENCE_MAX_ANALYSES_PER_RUN", "100")), 1000))
-    except ValueError:
-        max_per_run = 100
-    deferred_count = max(0, len(candidates) - max_per_run)
-    candidates = candidates[:max_per_run]
-    article_by_id = {article["id"]: article for article in articles}
-    source_names = {source["id"]: source["name"] for source in sources}
+    max_per_run = _bounded_env_int("INTELLIGENCE_MAX_ANALYSES_PER_RUN", 1, 100)
     results: list[dict[str, Any]] = []
     failures = 0
-    for article_id in candidates:
-        candidate_article = article_by_id.get(article_id)
-        if candidate_article is None or client is None:
+    deferred_count = 0
+    deferred_reason: str | None = None
+    for index, candidate in enumerate(candidates):
+        if len(results) >= max_per_run:
+            deferred_count += len(candidates) - index
+            deferred_reason = "PER_RUN_BUDGET"
+            break
+        article_id = candidate.get("id")
+        if not isinstance(article_id, str) or client is None:
+            deferred_count += 1
             continue
-        analysis_result = analyze_article(client, candidate_article, source_names.get(candidate_article["sourceId"], candidate_article["sourceId"]))
-        candidate_article.update(analysis_result)
-        results.append(candidate_article)
-        if candidate_article["analysisStatus"] != "completed":
+        try:
+            reservation = api.start_analysis({
+                "runId": run["id"],
+                "articleId": article_id,
+                "modelName": model_name,
+                "promptVersion": PROMPT_VERSION,
+                "analysisVersion": ANALYSIS_VERSION,
+            })
+        except IntelligenceAPIError:
+            api.import_batch({
+                "run": _final_run(run, "partial", "ANALYSIS_RESERVATION_FAILED"),
+                "sources": [],
+                "articles": results,
+            })
+            raise
+        if reservation.get("started") is not True:
+            deferred_count += len(candidates) - index
+            deferred_reason = str(reservation.get("reason") or "BUDGET_OR_CONCURRENCY_LIMIT")
+            break
+        source_name = candidate.get("sourceName")
+        if not isinstance(source_name, str) or not source_name:
+            source_name = str(candidate.get("sourceId") or "unknown")
+        analysis_result = analyze_article(client, candidate, source_name)
+        candidate.update(analysis_result)
+        results.append(candidate)
+        if candidate["analysisStatus"] != "completed":
             failures += 1
 
     status = "partial" if failures or deferred_count or failed_sources else "completed"
     error_parts = [crawl_errors] if crawl_errors else []
     if failures or deferred_count:
-        error_parts.append(f"{failures} article analysis job(s) failed; {deferred_count} deferred by the per-run limit")
+        reason = f" ({deferred_reason})" if deferred_reason else ""
+        error_parts.append(f"{failures} article analysis job(s) failed; {deferred_count} deferred{reason}")
     error_summary = "; ".join(error_parts) or None
     final_result = api.import_batch({
         "run": _final_run(run, status, error_summary),
