@@ -55,9 +55,23 @@ P3 最终验收（2026-10-21）：用户报告 Mac mini 使用真实 Microsoft E
 
 P4-0 审查结论（2026-10-21）：Relay 草稿 Worker/DO、Agent、allowlist、相关测试、独立 Compose profile 已存在；已修补 session ready/stale-close、透传同一客户端 Bearer 至 Fastify、Agent Bearer/固定目标验证、重定向拒绝和重复 query 限制。Orca 检查仅发现 `/home/zwq/.orca-relay` 的本机 shell 启动/状态工具，不含源码仓库；借鉴主动连接的架构经验但未复用原始源码。生成物 `node_modules/`、`dist/`、`.wrangler/`、缓存与凭据不入版本控制。详见 `docs/RELAY.md`。
 
-当前阶段阻塞：`wrangler whoami` 显示未认证；当前宿主机代理虽能访问 Cloudflare HTTPS，但 Relay Docker 网络访问宿主机 gateway/代理超时。没有 Cloudflare 授权和 Docker 可达的获批代理，不能验证真实 WSS、公网 API、代理恢复、连续运行或免费额度 Dashboard。LAN HTTPS 仍缺已有域名/DNS-01 权限/证书与 TLS 入口配置。P4 不能标记完成或进入 iOS。
+历史阻塞记录（2026-10-21）：当时 Wrangler 未认证，宿主机代理可达但 Docker 代理不可达，因此尚未部署 Worker/DO。该状态随后解除：使用独立 TrendRadar Worker、DO SQLite migration 及获授权 HTTP 代理完成真实部署；没有修改 Xray、防火墙、Orca Relay 或公司网络策略。
 
-2026-10-21 阻塞复核：Wrangler `4.151.2`、无认证；Worker/DO Free SQLite 配置仍仅本地 dry-run。宿主 Xray listener/代理 HTTPS CONNECT=200；同一 Docker edge 网络到 gateway 与宿主代理连接 timeout。宿主机代理路线上的公共 WSS echo handshake 成功，但不是 Cloudflare Worker 链路，也不证明 Docker 连通。见 `docs/RELAY.md` 环境诊断及最小授权方案。Cloudflare account/Worker 冲突状态未知，未部署、未改 firewall/Xray、未启动 Agent。待账户持有人创建/确认独立 Worker 并授予 per-Worker Editor token；待网络所有者批准固定 Agent→代理出口策略或提供受控 sidecar proxy。
+### P4 MVP 归档（2026-10-22）
+
+- **Relay MVP 功能验收：通过。** Worker `https://trendradar-intelligence-relay.vik1ang.workers.dev` → SQLite DO `RelayHub` → Linux Docker Relay Agent → Fastify 的真实链路已验证；已读健康、新闻列表/分页、搜索、详情和预生成分析；LAN 与 Relay 使用同一 API 契约。未授权/非法路由及写路径受拒绝；Agent 离线返回 503，LAN Web 独立可用，Agent 恢复后 Relay 恢复。
+- **长期稳定性验收：未完成。** 详见 `P4_RELAY_STABILITY_REPORT.md`。按用户指示停止观察时，公网只读 soak 为 29 分 52 秒、30/30 HTTP 200、无超时，不能标记为两小时或长期稳定性通过。
+- 观察窗口内 Cloudflare GraphQL 数据报告 Worker/DO errors 为 0；Agent 全部 30 次容器状态采样健康、未重启；窗口后单次内存读数并不能代表趋势。GraphQL Worker 请求数与本地探针相差 2 次，报告中保留为未解释的统计差异。
+- 未完成：两小时 soak；Agent RSS 起点/变化/峰值（原 `docker stats` 解析器把 `20.16MiB` 当数值和单位空格分隔，已在 `scripts/p4_relay_memory.py` 修复并以离线样例及当前容器读数验证，但不追补长时间采样）；线上客户端取消和在途断线注入；共享代理断线恢复；实际 Cloudflare Dashboard 剩余额度/DO SQLite 存储字节数；iOS 真机双线路验收。
+- 当前 Relay 业务代码、认证密钥和运行服务未因本次归档改动；没有触发生产批量 AI 分析。
+
+### LAN HTTPS 入口预审（2026-10-22；未部署）
+
+运行中的 Web 容器 Nginx 仅 `listen 80`、`server_name _`，将 `/api/v1/` 反代到 Docker 内部 `api:3001`，并为浏览器注入现有静态 Bearer；宿主机仅发布 `192.168.2.117:8081 -> web:80` 与 `127.0.0.1:13001 -> api:3001`。当前未发现 TLS 443 listener、项目配置的内部域名、DNS-01 记录、证书目录或已安装的 certbot/acme.sh。端口 443 当前可用，但不代表获准绑定。最小方案与权限前置条件见 `docs/IOS_HANDOFF.md`；在现有域名/DNS 控制权和公开受信证书就绪前，不发布 LAN HTTPS Endpoint、不修改 DNS 或重载 Nginx。LAN Web `8081` 保持原样。
+
+### iOS 设备认证预案（仅设计）
+
+当前 Backend `backend/src/auth.ts` 仅通过常量时间比较校验静态 `API_READ_TOKEN`；Web Nginx 注入该共享值，Relay Worker 当前入口也校验同一兼容 token，Agent 的 `RELAY_AGENT_TOKEN` 独立。iOS 发布前应采用增量设备凭据：Fastify 增加按设备独立签发/到期/撤销的高熵 Bearer 凭据及哈希存储，Backend 成为 LAN/Relay 最终校验方；保留现有静态 Bearer 供 Web 兼容，Bridge 凭据不变。Worker 只放行格式受限的设备凭据到只读 allowlist，真实有效性仍由同一 Fastify 校验，限流/拒绝路径仍在 Worker；不写设备业务数据到 Cloudflare。发行和撤销先用仅本机/运维可执行的管理命令，不暴露公网 Relay 管理接口。完整迁移步骤见 `docs/IOS_HANDOFF.md`；本轮未改生产认证体系。
 
 ## P5 — 集成交付
 

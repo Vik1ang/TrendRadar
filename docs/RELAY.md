@@ -4,11 +4,11 @@
 
 目标：未来 iOS 在公司内优先使用受信任的 LAN HTTPS API；外网通过 Worker → SQLite Durable Object → 主动连接的 Relay Agent → 固定 Fastify API。两路共享 Fastify/PostgreSQL/API 契约。Web 始终 LAN 直连；Cloudflare 不存储业务数据；Agent 不是通用隧道。
 
-**2026-10-21 P4 Relay MVP 已真实部署并端到端验证**。Worker `trendradar-intelligence-relay`：`https://trendradar-intelligence-relay.vik1ang.workers.dev`；首次代码部署版本 `796cb5b3-3a69-48f0-8785-640eeca9a522`，配置 Secrets 后当前版本 `5a9f8ea2-c9c8-44aa-8cfa-c9e4ca09d7ee`。SQLite DO `RelayHub` 已注册 Agent。Docker Relay Agent 经 `http://192.168.1.90:10801` 建立 WSS 并在重启及 65 秒观察后保持连接。LAN 与 Relay 的 `/api/v1/health`、新闻列表分页、DeepSeek 搜索、新闻详情、已完成分析响应逐项一致；未认证 API/错误 Bridge、非法路径/写方法/私有 ingestion 被拒绝。Agent 离线时 API 返回 503，LAN Web 仍为 200，Agent 重启后恢复。账户部署错误表明为 Workers Free；删除 Free 不支持的显式 `limits.cpu_ms` 后部署，没有升级计划。账户实际用量面板、数小时稳定性、代理中断恢复、LAN HTTPS 和 iOS 真机双线路测试仍待完成。
+**P4 Relay MVP 已真实部署并端到端验证；归档日期 2026-10-22。** Worker `trendradar-intelligence-relay`：`https://trendradar-intelligence-relay.vik1ang.workers.dev`；首次代码部署版本 `796cb5b3-3a69-48f0-8785-640eeca9a522`，配置 Secrets 后版本 `5a9f8ea2-c9c8-44aa-8cfa-c9e4ca09d7ee`。SQLite DO `RelayHub` 已注册 Agent。Docker Relay Agent 经 `http://192.168.1.90:10801` 建立 WSS。LAN 与 Relay 的健康、新闻列表分页、DeepSeek 搜索、详情和已完成分析响应一致；未认证 API/错误 Bridge、非法路径/写方法/私有 ingestion 被拒绝。Agent 离线时 API 返回 503，LAN Web 仍为 200，Agent 重启后恢复。2026-10-22 低频公网 soak 实测 29 分 52 秒、30/30 请求成功，Worker/DO GraphQL 窗口 errors 为 0；**Relay MVP 功能验收通过，但长期稳定性验收未完成**（未达到两小时）。Cloudflare 窗口与当日实际统计及免费额度对照见 `P4_RELAY_STABILITY_REPORT.md`；Dashboard 剩余额度和 SQLite 实际存储字节数未取得。代理中断恢复、在线取消/在途断线注入、内存长期趋势、LAN HTTPS 和 iOS 真机双线路测试仍待完成。
 
 仅 Worker Secrets 保存 `CLIENT_API_TOKEN` 与 `RELAY_AGENT_TOKEN`；值未写入仓库。Agent runtime env 位于仓库外 `/home/zwq/.config/trendradar/relay-agent.runtime.env`（权限 0600）。本次未触碰 Orca Relay、原始 TrendRadar/MCP、PostgreSQL、Backend API 或 LAN Web 容器。
 
-**凭据轮换待办：**一次诊断命令错误地把 API 容器环境变量当成 Python stdin 脚本执行，造成异常输出中出现 API Bearer 值。应将当前 `API_READ_TOKEN` 视为已暴露，并在安全维护窗口轮换 Backend `API_READ_TOKEN`、Worker `CLIENT_API_TOKEN` 与 Web 反向代理注入凭据。轮换需要更新 API/Web 容器运行配置；本轮未擅自重启这两个服务。不要复制旧值到文档、工单或聊天中。
+**凭据事件状态：**先前诊断输出曾暴露 API Bearer；后续已完成 API Token 轮换，并验证 LAN 与 Relay 读取恢复、旧凭据失效。真实值不记录于文档。当前设备级独立凭据尚未实现，见下文认证缺口和 `docs/IOS_HANDOFF.md`。
 
 ### 先前环境诊断（部署前历史状态；新的代理/认证验证已取代阻塞结论）
 
@@ -66,4 +66,4 @@ DO 已使用 Hibernation WebSocket API。Hibernation 时内存会丢失，连接
 
 Worker test/typecheck/deploy dry-run、Agent build/test 均通过；并已实际部署、建立 WSS/注册、请求真实 Fastify API 并对照 LAN/Relay 响应。`wrangler deploy --dry-run` 本身只验证构建，不作为外网验收证据。
 
-剩余 P4 验收：并发乱序/超时压力测试、代理中断恢复、数小时运行观察、Dashboard 实际用量复核、LAN HTTPS/DNS-01 与 iOS 双线路模拟。P4 Relay MVP 已连通，但 P4/P5 全量交付及 LAN HTTPS 未完成，本轮没有开发 iOS。
+剩余验收：两小时或更长持续观察；线上客户端取消和在途请求断线注入；共享代理中断恢复；Agent 内存长期趋势；Dashboard 剩余额度/SQLite 存储字节数复核；LAN HTTPS/DNS-01；iOS 双线路模拟与真机测试。P4 Relay MVP 功能已归档通过，但长期稳定性、LAN HTTPS 和 P4/P5 全量交付未完成，本轮没有开发 iOS。
