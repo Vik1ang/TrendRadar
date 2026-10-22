@@ -35,3 +35,19 @@
 - 新版 Ingestion API 只完成源码 build / 先前的本地镜像 build；运行中的容器仍是旧版本。部署必须先应用 Migration 002，再只重建 `ingest-api`，然后做有界导入。不得先部署依赖队列表的 API。
 - `ingest-token` 已保存至 `~/.config/trendradar/ingest-token`，取值沿用当前健康 Ingestion API 的活动凭据，未轮换；此前未找到可信备份副本。API Read Token 保留原值。两者及 `compose.env` 保持用户私有权限。
 - 下一生产步骤仍需独立明确授权：新生产备份、Migration 002、仅部署 `ingest-api`、有界首次导入和幂等复跑。本轮结论为**技术准备通过，生产写入未授权且未执行**。
+
+## 已授权生产上线记录（2026-10-22）
+
+以下记录取代上面的“生产写入未授权”作为当前状态；仅在用户明确授权 Migration 002、Ingestion API 更新及最多 40 篇导入后执行：
+
+- 备份：新建 `~/.local/share/trendradar/backups/trendradar-intelligence-pg16-20261022T072304Z-15097.dump`，PostgreSQL 16 custom-format，权限 `0600`；归档清单检查通过，并恢复到隔离 PostgreSQL 16，验证恢复后为 452 篇文章、3 条分析、Migration 001。
+- Migration 002：已在生产以单事务应用；迁移后文章 452、分析 3，任务队列和尝试表均为 0。
+- 部署：仅构建并更新 Compose 项目 `trendradar-lan-acceptance` 的 `ingest-api`。新容器 healthy，包含 Migration 002 与分析队列运行时代码。Backend API、Web、PostgreSQL、Relay Agent 和原版 TrendRadar/MCP 未重启。
+- 输入快照 dry-run 为 1,187 篇规范化去重候选；本次只推进前两批各 20 篇。首批新增 20、更新 0；同批以相同 Run ID 重放后仍是 20 篇唯一文章、20 个队列任务。第二批再新增 20、更新 0。40 篇均有唯一 ID、来源、标题和规范 URL，字段与冻结同步 spool 相符。
+- 40 篇分类：AI 5、财经 3、社会 1、科技 3，共 12 篇命中规则；28 篇保持未分类。没有历史分类回填。
+- 生产最终计数：492 篇文章、3 条分析、40 个队列任务、0 条分析尝试。Ingestion API 环境每日预算 0；模型调用 0。
+- 游标：冻结 spool 共 1,187 篇，当前 `nextIndex=40`；原 source/date 游标尚未推进，因本次并未完成整个快照。待处理 spool 保存在用户状态目录，权限 `0600`。后续同步需单独授权，不能将该检查点视为已经完成全量导入。
+- LAN 与 Relay 使用同一条已导入文章验证健康、详情、分析状态、搜索和分页：状态均为 HTTP 200；Article ID、标题、来源、分类、分析状态、搜索 ID 集及分页字段一致。公网请求使用 `TrendRadar-P2-Production-Validation/1.0` User-Agent。
+- 原版 TrendRadar 与 MCP 仍 running、restart count 0；PostgreSQL、Backend API、Web、Ingestion API、Relay Agent 均 healthy。AI Timer unit 不存在且未启用；本轮没有安装或启用 Timer。
+
+**阶段结论：** Migration、Ingestion API 与授权范围内 40 篇受控导入通过；未达到 P2 生产自动闭环验收。后续必须另行授权自动 Timer 以及后续增量/预算策略，本次授权不覆盖这些操作。
