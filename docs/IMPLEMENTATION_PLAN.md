@@ -97,3 +97,11 @@ P4-0 审查结论（2026-10-21）：Relay 草稿 Worker/DO、Agent、allowlist�
 - 真实模型生成已对单篇标题级新闻验收并持久化；另外已在一次性 runner 中以“每次最多 1 篇、无重试/无 fallback、顺序执行”真实试跑 `python -m trendradar` 自动采集→分析→数据库闭环，确认 274 条当次候选延后；原生产 cron/TrendRadar 服务的 intelligence 开关仍关闭，未观察 cron 定时触发。不得直接对全部 255 条存量新闻批量分析；生产启用前仍需明确日额度/成本预算、失败重试策略与调度限额，并由运维显式调整部署配置。
 - 未提供 Cloudflare 凭据/代理网络授权，尚未部署 Worker/DO 或做真实 WSS 外网访问；P4 需先核实计划用量和运行成本。
 - 数据库备份/恢复已在临时隔离 PostgreSQL 完成往返演练；仍需在正式部署环境安排例行备份、重启/数据库故障注入、LAN 防火墙及模型失败验收。
+
+### P2 生产接入续查（2026-10-22）
+
+- 现有 Supercronic 仍是唯一来源采集调度，每 30 分钟执行一次；运行容器镜像没有仓库内 Adapter Hook。开发了只读 SQLite 同步侧车 `trendradar.intelligence.sync`，只读取最新已提交的 crawl，不会请求新闻来源；但生产启动被 bind mount 路径分叉阻塞：正在运行容器 `/app/output` 中的当前热榜/RSS 数据与宿主当前 `output/` inode 不同。新容器挂同一路径看不到活动快照，因此没有部署侧车或重新抓取。
+- PostgreSQL 生产库 Migration 状态仍为 `001_initial.sql`；生产数据保持 452 篇文章、3 条分类关系、3 条分析记录、7 条采集运行记录。本轮备份至用户目录外部的受限目录（0600，custom dump 85,223 字节，restore list 验证通过）；Migration 001+002 在一次性隔离 PG 连跑两次成功，重复运行 no-op。生产 Migration 未应用，Ingestion API 未重建。
+- 侧车实现测试 12 项通过，Ruff/mypy 通过，Docker 镜像构建成功；真实 Docker 源目录只读 smoke 因挂载分叉返回空数据，明确不作为生产接入通过。AI 继续关闭，每日上限 0；没有模型调用或历史文章回填。
+- Relay 403 定位为 Python urllib 默认 User-Agent 命中 Cloudflare Error 1010 `browser_signature_banned`，不是有效公开只读路由 allowlist/Token 问题；相同 URL/认证用 curl 默认 User-Agent 返回 200，未修改 Worker/Secret。
+- **P2 仍未通过。** 若要修复活动 SQLite bind path，需要把运行容器内 1.3 GiB 热榜和 120 MiB RSS 数据安全导出/校验，再受控重建 TrendRadar 使 bind 对齐；`IMMEDIATE_RUN=true` 可能造成额外即时采集，建议受控窗口临时设为 false。按用户要求，未获明确批准前不执行原版 TrendRadar 重建、活动 DB 导出/覆盖、网络改动或生产 sidecar 启动。方案和操作边界见 `docs/P2_PRODUCTION_INGESTION_PLAN.md`。
