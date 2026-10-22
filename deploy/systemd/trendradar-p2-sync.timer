@@ -1,0 +1,10 @@
+[Unit]
+Description=Poll existing TrendRadar SQLite snapshots without starting a crawler
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+Unit=trendradar-p2-sync.service
+
+[Install]
+WantedBy=timers.target

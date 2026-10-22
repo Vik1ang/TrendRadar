@@ -100,8 +100,11 @@ P4-0 审查结论（2026-10-21）：Relay 草稿 Worker/DO、Agent、allowlist�
 
 ### P2 生产接入续查（2026-10-22）
 
-- 现有 Supercronic 仍是唯一来源采集调度，每 30 分钟执行一次；运行容器镜像没有仓库内 Adapter Hook。开发了只读 SQLite 同步侧车 `trendradar.intelligence.sync`，只读取最新已提交的 crawl，不会请求新闻来源；但生产启动被 bind mount 路径分叉阻塞：正在运行容器 `/app/output` 中的当前热榜/RSS 数据与宿主当前 `output/` inode 不同。新容器挂同一路径看不到活动快照，因此没有部署侧车或重新抓取。
-- PostgreSQL 生产库 Migration 状态仍为 `001_initial.sql`；生产数据保持 452 篇文章、3 条分类关系、3 条分析记录、7 条采集运行记录。本轮备份至用户目录外部的受限目录（0600，custom dump 85,223 字节，restore list 验证通过）；Migration 001+002 在一次性隔离 PG 连跑两次成功，重复运行 no-op。生产 Migration 未应用，Ingestion API 未重建。
-- 侧车实现测试 12 项通过，Ruff/mypy 通过，Docker 镜像构建成功；真实 Docker 源目录只读 smoke 因挂载分叉返回空数据，明确不作为生产接入通过。AI 继续关闭，每日上限 0；没有模型调用或历史文章回填。
-- Relay 403 定位为 Python urllib 默认 User-Agent 命中 Cloudflare Error 1010 `browser_signature_banned`，不是有效公开只读路由 allowlist/Token 问题；相同 URL/认证用 curl 默认 User-Agent 返回 200，未修改 Worker/Secret。
-- **P2 仍未通过。** 若要修复活动 SQLite bind path，需要把运行容器内 1.3 GiB 热榜和 120 MiB RSS 数据安全导出/校验，再受控重建 TrendRadar 使 bind 对齐；`IMMEDIATE_RUN=true` 可能造成额外即时采集，建议受控窗口临时设为 false。按用户要求，未获明确批准前不执行原版 TrendRadar 重建、活动 DB 导出/覆盖、网络改动或生产 sidecar 启动。方案和操作边界见 `docs/P2_PRODUCTION_INGESTION_PLAN.md`。
+- 现有 Supercronic 仍是唯一来源采集调度，每 30 分钟执行一次；原版容器未重建。活动 SQLite 位于运行中 `trendradar:/app/output` 的旧 bind mount inode，当前仓库 `output/` 是不同目录对象。
+- 已实现方案 B：宿主机受控 `docker exec` → 原容器只读 SQLite 查询 → 有界 JSONL → 标准化/规则分类 → 既有私有 Ingestion API。无源容器文件改动、无 Docker Socket 挂入、无第二新闻抓取器；systemd 5 分钟触发模板仅落盘，未安装/启用。
+- 真实 SQLite 只读 dry-run 连跑两次结果一致：4 个前一日/当日 hotlist/RSS 快照，1,530 行读取，1,185 规范化候选、345 去重，预计对现有 452 篇中 8 篇幂等更新、预计新增 1,177 篇；规则标签 AI 111、科技 98、财经 114、社会 12（可重叠），未分类 891。源读取失败 4 项。数据库写入与模型调用均为 0。
+- Migration 002 在临时 PostgreSQL 16 上由 runner 连跑两次，第二次无重放；生产仍只有 Migration 001、452 篇。备份 custom dump 0600、85,223 字节，隔离容器 `pg_restore --list` 验证可读。生产 Migration 002、首次导入与定时启用仍需明确授权；`--apply` 在 Migration 缺失时 fail-closed。
+- 新文章 run metadata 持久化源库日期、crawl record ID/时间、读取/去重/失败数；数据库现有列记录插入/更新数，run ID 每次唯一。游标按 source/date/crawl record，前一日与当日双窗口，导入失败不推进；文章稳定 ID/唯一 dedupe key 保障重放幂等。
+- AI 保持关闭：生产 API 只读预算确认 per-run 1、per-day 0、并发 1、最多尝试 2；未执行真实模型调用。原版 TrendRadar、MCP、PostgreSQL、API、Ingestion、Web、Relay 均运行且 RestartCount=0。
+- Relay Python urllib 默认 UA 的 1010 通过显式 `TrendRadar-P2-Diagnostic/1.0` 复测为 200；归为 Cloudflare 边缘客户端签名兼容，未改 Worker 或安全策略。具体账户规则 ID 未核实。
+- **P2 生产闭环未通过。** 当前只完成读取/规范化 dry-run 与导入执行器准备；尚未执行生产 Migration、写入同步、自动调度或两次真实定时周期验收。详见 `docs/P2_PRODUCTION_INGESTION_PLAN.md`。

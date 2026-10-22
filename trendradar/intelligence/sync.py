@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import sqlite3
-import time
+import sys
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any, Protocol
-from zoneinfo import ZoneInfo
 
-from trendradar.intelligence.api import IngestionAPI, IntelligenceAPIError
+from trendradar.intelligence.api import IngestionAPI
+from trendradar.intelligence.normalize import build_batch
 from trendradar.intelligence.pipeline import run_intelligence_pipeline
+from trendradar.intelligence.stream import ExportedSnapshot, parse_export_jsonl
 from trendradar.storage.base import NewsData, RSSData
 from trendradar.storage.local import LocalStorageBackend
 
@@ -50,7 +50,7 @@ def _marker(value: NewsData | RSSData | None) -> str | None:
     return f"{value.date}:{value.crawl_time}"
 
 
-def _read_cursors(path: Path) -> dict[str, str]:
+def _read_cursors(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -60,15 +60,113 @@ def _read_cursors(path: Path) -> dict[str, str]:
         return {}
     if not isinstance(value, dict):
         return {}
-    return {key: item for key, item in value.items() if key in {"news", "rss"} and isinstance(item, str)}
+    return {
+        key: item for key, item in value.items()
+        if isinstance(key, str) and (
+            (key in {"news", "rss"} and isinstance(item, str))
+            or (key.startswith(("news:", "rss:"))
+                and isinstance(item, dict) and isinstance(item.get("recordId"), int))
+        )
+    }
 
 
-def _write_cursors(path: Path, cursors: dict[str, str]) -> None:
+def _write_cursors(path: Path, cursors: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(cursors, sort_keys=True), encoding="utf-8")
     os.chmod(temporary, 0o600)
     os.replace(temporary, path)
+
+
+def sync_exported_snapshots(
+    snapshots: list[ExportedSnapshot],
+    api: IngestionAPI,
+    cursor_path: Path,
+    *,
+    pipeline: Pipeline = run_intelligence_pipeline,
+) -> dict[str, Any]:
+    """Import host-streamed snapshots; only commit each source/date cursor after API success."""
+    cursors = _read_cursors(cursor_path)
+    active_dates = {
+        item.strip() for item in os.environ.get("P2_SYNC_DATES", "").split(",") if item.strip()
+    }
+    if active_dates:
+        cursors = {
+            key: marker for key, marker in cursors.items()
+            if key.rsplit(":", 1)[-1] in active_dates
+        }
+    by_date: dict[str, dict[str, ExportedSnapshot]] = {}
+    for snapshot in snapshots:
+        by_date.setdefault(snapshot.date, {})[snapshot.source] = snapshot
+
+    results: list[dict[str, Any]] = []
+    imported_sources: list[str] = []
+    deduplicated_count = 0
+    for day in sorted(by_date):
+        changed = {
+            source: snapshot for source, snapshot in by_date[day].items()
+            if cursors.get(f"{source}:{day}") != snapshot.marker
+        }
+        if not changed:
+            continue
+        news_snapshot = changed.get("news")
+        rss_snapshot = changed.get("rss")
+        news_data = news_snapshot.data if news_snapshot and isinstance(news_snapshot.data, NewsData) else None
+        rss_data = rss_snapshot.data if rss_snapshot and isinstance(rss_snapshot.data, RSSData) else None
+        _, normalized_articles = build_batch(news_data, rss_data, "Asia/Shanghai")
+        raw_count = sum(snapshot.item_count for snapshot in changed.values())
+        deduplicated_count += max(0, raw_count - len(normalized_articles))
+        metadata = {
+            "sqliteSync": {
+                "sourceDatabaseDate": day,
+                "sources": [
+                    {
+                        "source": source,
+                        "recordId": snapshot.marker["recordId"],
+                        "crawlTime": snapshot.marker["crawlTime"],
+                        "readCount": snapshot.item_count,
+                        "failedCount": len(snapshot.data.failed_ids),
+                    }
+                    for source, snapshot in sorted(changed.items())
+                ],
+                "readCount": raw_count,
+                "deduplicatedCount": max(0, raw_count - len(normalized_articles)),
+                "failureCount": sum(len(snapshot.data.failed_ids) for snapshot in changed.values()),
+            }
+        }
+        result = pipeline(
+            news_data,
+            rss_data,
+            {"TIMEZONE": "Asia/Shanghai"},
+            api=api,
+            run_metadata=metadata,
+        )
+        if result is None:
+            raise RuntimeError("SQLite import did not complete; retaining source cursors")
+        results.append(result)
+        advanced = False
+        for source, snapshot in changed.items():
+            # The API commit succeeded, so acknowledge this snapshot even when
+            # an upstream feed failed. The failed-source count is persisted in
+            # the partial run; the next crawl is queried from this cursor and
+            # will include that source once it succeeds. Replaying an unchanged
+            # partial snapshot every poll would create duplicate run noise.
+            cursors[f"{source}:{day}"] = snapshot.marker
+            imported_sources.append(f"{source}:{day}")
+            advanced = True
+        if advanced:
+            _write_cursors(cursor_path, cursors)
+
+    return {
+        "runCount": len(results),
+        "sourcesAdvanced": imported_sources,
+        "sourceReadCount": sum(snapshot.item_count for snapshot in snapshots),
+        "deduplicatedCount": deduplicated_count,
+        "failedCount": sum(len(snapshot.data.failed_ids) for snapshot in snapshots),
+        "insertedCount": sum(int(result.get("insertedCount", 0)) for result in results),
+        "updatedCount": sum(int(result.get("updatedCount", 0)) for result in results),
+        "results": results,
+    }
 
 
 def sync_latest_once(
@@ -107,63 +205,33 @@ def sync_latest_once(
     return result
 
 
-def _positive_int(name: str, default: int, minimum: int, maximum: int) -> int:
-    raw = os.environ.get(name, str(default))
-    try:
-        result = int(raw)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an integer") from exc
-    if not minimum <= result <= maximum:
-        raise ValueError(f"{name} must be between {minimum} and {maximum}")
-    return result
-
-
-def run_forever() -> None:
+def run_stream_once() -> None:
+    """Consume a host-produced JSONL stream and import one bounded sync run."""
     if os.environ.get("INTELLIGENCE_ANALYSIS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
-        raise RuntimeError("The SQLite sync service is import-only; automatic analysis must remain disabled")
-    if os.environ.get("INTELLIGENCE_ENABLED", "true").strip().lower() not in {"1", "true", "yes", "on"}:
-        raise RuntimeError("INTELLIGENCE_ENABLED must be true for the import-only sync service")
-
-    interval = _positive_int("INTELLIGENCE_SYNC_INTERVAL_SECONDS", 60, 15, 3600)
-    timezone = os.environ.get("TREND_RADAR_TIMEZONE", "Asia/Shanghai")
+        raise RuntimeError("SQLite sync is import-only; real model calls are disabled")
+    if int(os.environ.get("INTELLIGENCE_MAX_ANALYSES_PER_DAY", "0")) != 0:
+        raise RuntimeError("SQLite sync requires INTELLIGENCE_MAX_ANALYSES_PER_DAY=0")
+    os.environ["INTELLIGENCE_ENABLED"] = "true"
+    snapshots = parse_export_jsonl(sys.stdin)
     cursor_path = Path(os.environ.get("INTELLIGENCE_SYNC_STATE_PATH", "/var/lib/trendradar-sync/cursors.json"))
     api = IngestionAPI()
-    storage = ReadOnlySnapshotStorage(
-        data_dir=os.environ.get("TREND_RADAR_OUTPUT_DIR", "/app/output"),
-        enable_txt=False,
-        enable_html=False,
-        timezone=timezone,
-    )
-    stopping = False
-
-    def stop(_signum: int, _frame: Any) -> None:
-        nonlocal stopping
-        stopping = True
-
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
-    print("SQLite ingestion sync started; source crawl remains owned by TrendRadar", flush=True)
     try:
-        while not stopping:
-            try:
-                today = datetime.now(ZoneInfo(timezone)).date()
-                result = sync_latest_once(storage, api, cursor_path, today=today)
-                if result:
-                    print(json.dumps({
-                        "event": "snapshot_imported",
-                        "articleCount": result.get("articleCount", 0),
-                        "insertedCount": result.get("insertedCount", 0),
-                        "updatedCount": result.get("updatedCount", 0),
-                    }), flush=True)
-            except (IntelligenceAPIError, OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
-                # Avoid dumping request objects, headers, response bodies, or credentials.
-                print(json.dumps({"event": "snapshot_import_failed", "errorType": type(exc).__name__}), flush=True)
-            if not stopping:
-                time.sleep(interval)
+        result = sync_exported_snapshots(snapshots, api, cursor_path)
+        print(json.dumps({
+            "event": "sqlite_sync_completed",
+            "runCount": result["runCount"],
+            "sourceReadCount": result["sourceReadCount"],
+            "insertedCount": result["insertedCount"],
+            "updatedCount": result["updatedCount"],
+            "failedCount": result["failedCount"],
+            "sourcesAdvanced": result["sourcesAdvanced"],
+        }), flush=True)
     finally:
-        storage.cleanup()
         api.session.close()
 
 
 if __name__ == "__main__":
-    run_forever()
+    if sys.argv[1:] == ["--stdin"]:
+        run_stream_once()
+    else:
+        raise SystemExit("supported argument: --stdin")

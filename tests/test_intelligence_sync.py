@@ -9,7 +9,12 @@ from typing import Any, cast
 import pytest
 
 from trendradar.intelligence.api import IngestionAPI
-from trendradar.intelligence.sync import ReadOnlySnapshotStorage, sync_latest_once
+from trendradar.intelligence.stream import ExportedSnapshot
+from trendradar.intelligence.sync import (
+    ReadOnlySnapshotStorage,
+    sync_exported_snapshots,
+    sync_latest_once,
+)
 from trendradar.storage.base import NewsData, RSSData
 
 
@@ -98,3 +103,59 @@ def test_snapshot_storage_opens_sqlite_read_only_without_creating_schema(tmp_pat
     with pytest.raises(sqlite3.OperationalError, match="readonly"):
         connection.execute("CREATE TABLE forbidden_table (id INTEGER)")
     storage.cleanup()
+
+
+def test_stream_sync_advances_date_scoped_cursors_only_after_persist_and_is_idempotent(tmp_path: Path) -> None:
+    snapshots = [
+        ExportedSnapshot(
+            "news", day, {"recordId": record_id, "crawlTime": crawl_time, "createdAt": "created"},
+            NewsData(date=day, crawl_time=crawl_time, items={"source": []}), 0,
+        )
+        for day, record_id, crawl_time in (
+            ("2026-10-21", 4, "23-32"), ("2026-10-22", 1, "00-02"),
+        )
+    ]
+    cursor_path = tmp_path / "state" / "cursors.json"
+    calls: list[dict[str, Any]] = []
+
+    def pipeline(_news: NewsData | None, _rss: RSSData | None, _config: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs["run_metadata"])
+        return {"runId": f"run-{len(calls)}", "insertedCount": 0, "updatedCount": 0}
+
+    first = sync_exported_snapshots(snapshots, cast(IngestionAPI, object()), cursor_path, pipeline=pipeline)
+    assert first["runCount"] == 2
+    assert first["sourcesAdvanced"] == ["news:2026-10-21", "news:2026-10-22"]
+    assert [item["sqliteSync"]["sourceDatabaseDate"] for item in calls] == ["2026-10-21", "2026-10-22"]
+    persisted = json.loads(cursor_path.read_text())
+    assert persisted["news:2026-10-21"]["recordId"] == 4
+    assert persisted["news:2026-10-22"]["recordId"] == 1
+
+    second = sync_exported_snapshots(snapshots, cast(IngestionAPI, object()), cursor_path, pipeline=pipeline)
+    assert second["runCount"] == 0
+    assert len(calls) == 2
+
+
+def test_stream_sync_keeps_cursor_when_ingestion_fails_and_records_partial_source_failure(tmp_path: Path) -> None:
+    data = NewsData(date="2026-10-22", crawl_time="10-02", items={"source": []}, failed_ids=["broken-source"])
+    snapshot = ExportedSnapshot(
+        "news", "2026-10-22", {"recordId": 9, "crawlTime": "10-02", "createdAt": "created"}, data, 0,
+    )
+    cursor_path = tmp_path / "cursors.json"
+
+    def failed_pipeline(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("temporary ingestion failure")
+
+    with pytest.raises(RuntimeError, match="temporary ingestion failure"):
+        sync_exported_snapshots([snapshot], cast(IngestionAPI, object()), cursor_path, pipeline=failed_pipeline)
+    assert not cursor_path.exists()
+
+    metadata: dict[str, Any] = {}
+
+    def partial_pipeline(_news: NewsData | None, _rss: RSSData | None, _config: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        metadata.update(kwargs["run_metadata"])
+        return {"runId": "partial-run", "insertedCount": 0, "updatedCount": 0}
+
+    result = sync_exported_snapshots([snapshot], cast(IngestionAPI, object()), cursor_path, pipeline=partial_pipeline)
+    assert result["failedCount"] == 1
+    assert metadata["sqliteSync"]["failureCount"] == 1
+    assert json.loads(cursor_path.read_text())["news:2026-10-22"]["recordId"] == 9

@@ -1,0 +1,16 @@
+[Unit]
+Description=TrendRadar read-only SQLite to Intelligence PostgreSQL sync
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=zwq
+SupplementaryGroups=docker
+WorkingDirectory=/home/zwq/Workspace/TrendRadar
+Environment=P2_SYNC_STATE_DIR=/home/zwq/.local/state/trendradar-p2-sync
+Environment=P2_SYNC_COMPOSE_PROJECT=trendradar-lan-acceptance
+Environment=TREND_RADAR_TIMEZONE=Asia/Shanghai
+ExecStart=/home/zwq/.local/bin/uv run --locked python scripts/p2_sqlite_sync.py --apply
+TimeoutStartSec=180
+UMask=0077

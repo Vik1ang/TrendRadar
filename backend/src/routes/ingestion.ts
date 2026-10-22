@@ -33,6 +33,7 @@ const bodySchema = Type.Object({
     id: Type.String({ format: 'uuid' }), startedAt: Type.String({ format: 'date-time' }), finishedAt: Type.String({ format: 'date-time' }),
     status: Type.Union([Type.Literal('running'), Type.Literal('completed'), Type.Literal('partial'), Type.Literal('failed')]),
     sourceCount: Type.Integer({ minimum: 0, maximum: 10000 }), errorSummary: Type.Optional(Type.String({ maxLength: 4000 })),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   }),
   sources: Type.Array(source, { maxItems: 500 }),
   articles: Type.Array(article, { maxItems: 1000 }),

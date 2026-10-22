@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import unicodedata
 from datetime import UTC, datetime
 from typing import Any
@@ -73,7 +74,10 @@ def _first_seen_at(value: str, crawl_date: str, crawl_time: str, timezone_name: 
         return parsed
     for candidate_time in (value, crawl_time):
         if candidate_time and crawl_date:
-            parsed = _iso_datetime(f"{crawl_date} {candidate_time.strip()}", timezone_name)
+            normalized_time = candidate_time.strip()
+            if re.fullmatch(r"\d{1,2}-\d{2}", normalized_time):
+                normalized_time = normalized_time.replace("-", ":")
+            parsed = _iso_datetime(f"{crawl_date} {normalized_time}", timezone_name)
             if parsed:
                 return parsed
     return _iso_datetime(crawl_time, timezone_name)

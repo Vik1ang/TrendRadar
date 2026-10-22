@@ -33,7 +33,7 @@ export type ArticleInput = {
   analysis?: AnalysisInput;
 };
 export type IngestionInput = {
-  run: { id: string; startedAt: string; finishedAt: string; status: 'running' | 'completed' | 'partial' | 'failed'; sourceCount: number; errorSummary?: string };
+  run: { id: string; startedAt: string; finishedAt: string; status: 'running' | 'completed' | 'partial' | 'failed'; sourceCount: number; errorSummary?: string; metadata?: Record<string, unknown> };
   sources: SourceInput[];
   articles: ArticleInput[];
 };
@@ -282,15 +282,17 @@ export class IngestionRepository {
       }
 
       await client.query(
-        `INSERT INTO ingestion_runs(id,started_at,finished_at,status,source_count,article_count,inserted_count,updated_count,analysis_succeeded,analysis_failed,error_summary)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        `INSERT INTO ingestion_runs(id,started_at,finished_at,status,source_count,article_count,inserted_count,updated_count,analysis_succeeded,analysis_failed,error_summary,metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)
          ON CONFLICT (id) DO UPDATE SET finished_at=EXCLUDED.finished_at,status=EXCLUDED.status,
            source_count=EXCLUDED.source_count,article_count=GREATEST(ingestion_runs.article_count,EXCLUDED.article_count),
            inserted_count=GREATEST(ingestion_runs.inserted_count,EXCLUDED.inserted_count),
            updated_count=GREATEST(ingestion_runs.updated_count,EXCLUDED.updated_count),
-           analysis_succeeded=EXCLUDED.analysis_succeeded,analysis_failed=EXCLUDED.analysis_failed,error_summary=EXCLUDED.error_summary`,
+           analysis_succeeded=EXCLUDED.analysis_succeeded,analysis_failed=EXCLUDED.analysis_failed,error_summary=EXCLUDED.error_summary,
+           metadata=COALESCE(EXCLUDED.metadata,ingestion_runs.metadata)`,
         [input.run.id, input.run.startedAt, input.run.finishedAt, input.run.status, input.run.sourceCount,
-          input.articles.length, insertedCount, updatedCount, analysisSucceeded, analysisFailed, input.run.errorSummary ?? null],
+          input.articles.length, insertedCount, updatedCount, analysisSucceeded, analysisFailed,
+          input.run.errorSummary ?? null, input.run.metadata ? JSON.stringify(input.run.metadata) : null],
       );
       await client.query('COMMIT');
       return { runId: input.run.id, articleCount: input.articles.length, insertedCount, updatedCount };

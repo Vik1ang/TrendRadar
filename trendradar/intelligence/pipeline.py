@@ -61,6 +61,7 @@ def run_intelligence_pipeline(
     *,
     api: IngestionAPI | None = None,
     client: AIClient | None = None,
+    run_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Persist one crawl batch, then analyze only articles missing this model/prompt version."""
     if not _env_bool("INTELLIGENCE_ENABLED", False):
@@ -82,6 +83,7 @@ def run_intelligence_pipeline(
         "finishedAt": now,
         "status": "running",
         "sourceCount": source_count,
+        **({"metadata": run_metadata} if run_metadata else {}),
     }
     crawl_errors = f"{failed_sources} source(s) failed" if failed_sources else None
 

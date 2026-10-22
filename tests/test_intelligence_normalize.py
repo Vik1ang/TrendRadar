@@ -1,4 +1,4 @@
-from trendradar.intelligence.normalize import build_batch, normalize_url
+from trendradar.intelligence.normalize import _first_seen_at, build_batch, normalize_url
 from trendradar.storage.base import NewsData, NewsItem, RSSData, RSSItem
 
 
@@ -43,6 +43,10 @@ def test_build_batch_preserves_historical_first_seen_time():
     _sources, articles = build_batch(data, None, "Asia/Shanghai")
 
     assert articles[0]["firstSeenAt"] == "2026-10-19T01:30:00Z"
+
+
+def test_build_batch_normalizes_trendradar_hour_dash_minute_timestamps():
+    assert _first_seen_at("00-02", "2026-10-22", "14-02", "Asia/Shanghai") == "2026-10-21T16:02:00Z"
 
 
 def test_build_batch_assigns_baseline_categories_without_ai_analysis():

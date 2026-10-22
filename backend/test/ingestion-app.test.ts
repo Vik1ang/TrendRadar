@@ -109,6 +109,47 @@ describe('private ingestion API', () => {
     expect(statements.some((sql) => sql.includes('INSERT INTO article_analysis_jobs'))).toBe(false);
   });
 
+  it('persists source snapshot and dedupe telemetry in ingestion run metadata', async () => {
+    let runSql = '';
+    let runValues: unknown[] = [];
+    const fakeClient = {
+      query: async (sql: string, values?: unknown[]) => {
+        if (sql.includes('INSERT INTO ingestion_runs')) {
+          runSql = sql;
+          runValues = values ?? [];
+        }
+        return { rows: [], rowCount: 1 };
+      },
+      release: () => undefined,
+    };
+    const pool = {
+      query: async () => ({ rows: [{ '?column?': 1 }], rowCount: 1 }),
+      connect: async () => fakeClient,
+    } as unknown as Pool;
+    const app = await createTestApp(pool);
+    const metadata = {
+      sqliteSync: {
+        sourceDatabaseDate: '2026-10-22',
+        sources: [{ source: 'news', recordId: 29, crawlTime: '14-02', readCount: 10, failedCount: 0 }],
+        readCount: 10,
+        deduplicatedCount: 2,
+        failureCount: 0,
+      },
+    };
+    const response = await app.inject({
+      method: 'POST', url: '/api/v1/internal/ingestion',
+      headers: { authorization: 'Bearer ingest-test-token' },
+      payload: {
+        run: { id: '22222222-2222-4222-8222-222222222222', startedAt: '2026-10-20T00:00:00Z',
+          finishedAt: '2026-10-20T00:01:00Z', status: 'completed', sourceCount: 1, metadata },
+        sources: [], articles: [],
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(runSql).toContain('error_summary,metadata');
+    expect(JSON.parse(String(runValues[11]))).toEqual(metadata);
+  });
+
   it('fails closed when the server-side daily analysis budget is zero', async () => {
     const app = await createTestApp();
     const response = await app.inject({
