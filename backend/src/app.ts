@@ -10,6 +10,7 @@ import { registerNewsRoutes } from './routes/news.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerStatusRoutes } from './routes/status.js';
 import { validBearer } from './auth.js';
+import { API_LOG_REDACT_PATHS } from './logging.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -20,7 +21,7 @@ declare module 'fastify' {
 export interface AppDependencies { pool: Pool; config: AppConfig }
 
 export async function buildApp({ pool, config }: AppDependencies): Promise<FastifyInstance> {
-  const app = Fastify({ bodyLimit: 3 * 1024 * 1024, logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } })
+  const app = Fastify({ bodyLimit: 3 * 1024 * 1024, logger: { redact: [...API_LOG_REDACT_PATHS] } })
     .withTypeProvider<TypeBoxTypeProvider>();
   const repository = new NewsRepository(pool);
   const service = new NewsService(repository);
