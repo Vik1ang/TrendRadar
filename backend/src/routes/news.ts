@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { Type, type Static } from 'typebox';
 import type { NewsService } from '../services/news-service.js';
+import { articleErrorResponses, queryErrorResponses, readErrorResponses } from './responses.js';
 
 const pageQuery = Type.Object({
   q: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
@@ -58,17 +59,17 @@ function toFilters(query: PageQuery) {
 
 export async function registerNewsRoutes(app: FastifyInstance, service: NewsService): Promise<void> {
   app.get('/api/v1/news', {
-    schema: { querystring: pageQuery, response: { 200: pageSchema }, security: [{ bearerAuth: [] }], tags: ['news'], summary: 'List and filter news' },
+    schema: { querystring: pageQuery, response: { 200: pageSchema, ...queryErrorResponses }, security: [{ bearerAuth: [] }], tags: ['news'], summary: 'List and filter news' },
     preHandler: app.authenticateRead,
   }, async (request) => service.list(toFilters(request.query as PageQuery)));
 
   app.get('/api/v1/search', {
-    schema: { querystring: pageQuery, response: { 200: pageSchema }, security: [{ bearerAuth: [] }], tags: ['news'], summary: 'Search news in PostgreSQL' },
+    schema: { querystring: pageQuery, response: { 200: pageSchema, ...queryErrorResponses }, security: [{ bearerAuth: [] }], tags: ['news'], summary: 'Search news in PostgreSQL' },
     preHandler: app.authenticateRead,
   }, async (request) => service.list(toFilters(request.query as PageQuery)));
 
   app.get<{ Params: { id: string } }>('/api/v1/news/:id', {
-    schema: { params: articleIdParams, response: { 200: articleSchema }, security: [{ bearerAuth: [] }], tags: ['news'], summary: 'Get a news article' },
+    schema: { params: articleIdParams, response: { 200: articleSchema, ...articleErrorResponses }, security: [{ bearerAuth: [] }], tags: ['news'], summary: 'Get a news article' },
     preHandler: app.authenticateRead,
   }, async (request, reply) => {
     const article = await service.getById(request.params.id);
@@ -86,7 +87,7 @@ export async function registerNewsRoutes(app: FastifyInstance, service: NewsServ
         potentialImpacts: { type: 'array' }, uncertainties: { type: 'array' }, evidenceScope: { type: 'string', enum: ['title', 'summary', 'content'] },
         modelName: { type: 'string' }, promptVersion: { type: 'string' }, analysisVersion: { type: 'integer' }, analyzedAt: { type: ['string', 'null'], format: 'date-time' },
       },
-    } }, security: [{ bearerAuth: [] }], tags: ['news'], summary: 'Get pre-generated article analysis' },
+    }, ...articleErrorResponses }, security: [{ bearerAuth: [] }], tags: ['news'], summary: 'Get pre-generated article analysis' },
     preHandler: app.authenticateRead,
   }, async (request, reply) => {
     const analysis = await service.getAnalysis(request.params.id);
@@ -95,12 +96,12 @@ export async function registerNewsRoutes(app: FastifyInstance, service: NewsServ
   });
 
   app.get('/api/v1/categories', {
-    schema: { response: { 200: { type: 'array', items: { ...categorySchema, required: ['id', 'name', 'sortOrder'], properties: { ...categorySchema.properties, sortOrder: { type: 'integer' } } } } }, security: [{ bearerAuth: [] }], tags: ['catalog'], summary: 'List categories' },
+    schema: { response: { 200: { type: 'array', items: { ...categorySchema, required: ['id', 'name', 'sortOrder'], properties: { ...categorySchema.properties, sortOrder: { type: 'integer' } } } }, ...readErrorResponses }, security: [{ bearerAuth: [] }], tags: ['catalog'], summary: 'List categories' },
     preHandler: app.authenticateRead,
   }, () => service.listCategories());
 
   app.get('/api/v1/sources', {
-    schema: { response: { 200: { type: 'array', items: sourceSchema } }, security: [{ bearerAuth: [] }], tags: ['catalog'], summary: 'List sources' },
+    schema: { response: { 200: { type: 'array', items: sourceSchema }, ...readErrorResponses }, security: [{ bearerAuth: [] }], tags: ['catalog'], summary: 'List sources' },
     preHandler: app.authenticateRead,
   }, () => service.listSources());
 }

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { NewsRepository } from '../repositories/news-repository.js';
+import { readErrorResponses } from './responses.js';
 
 export async function registerStatusRoutes(app: FastifyInstance, repository: NewsRepository): Promise<void> {
   app.get('/api/v1/status', {
@@ -8,6 +9,7 @@ export async function registerStatusRoutes(app: FastifyInstance, repository: New
       security: [{ bearerAuth: [] }],
       summary: 'Get recent ingestion and analysis status',
       response: {
+        ...readErrorResponses,
         200: {
           type: 'object',
           required: ['database', 'articleCount', 'latestArticleAt', 'latestRun'],

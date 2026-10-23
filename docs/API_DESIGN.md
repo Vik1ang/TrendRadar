@@ -5,9 +5,12 @@
 ## 认证和错误
 
 - `/api/v1/health` 返回 `200`（API 可用、DB ready）或 `503`（DB 不可用），字段包含稳定 `service: "trendradar-intelligence"` 服务身份，不返回连接串/密钥。客户端须同时验证预配置 TLS 主机身份和该预期服务标识；该标识不能单独作为身份凭据。
+- Fastify 的 health 路由不要求业务 Bearer；当前 Cloudflare Worker 入口还会执行边缘认证（包括 health），因此经 Relay 调用仍需 Worker 接受的凭据。OpenAPI 描述的是 Fastify，不描述 Worker 外层策略。
 - 其他只读业务路由使用 Bearer `API_READ_TOKEN`；同源 Web 由反向代理安全注入/转发，浏览器配置不写入长期秘密。启用 Relay 时 Worker `CLIENT_API_TOKEN` 必须与后端 `API_READ_TOKEN` 同值，Agent 转发客户端原始 Authorization，后端再次校验，不信任客户端自报角色/身份头。Agent 另持有独立机器级 `RELAY_AGENT_TOKEN`。现有用户令牌为单用户静态凭据，暂不支持到期/设备级撤销；发布 iOS 前必须补足凭据生命周期或明确安全轮换方案。单用户 LAN 不是公开认证边界。
 - `POST /api/v1/internal/ingestion` 由独立 `ingest-api:3002` listener 提供，只加入 Compose internal network，不发布主机端口；要求独立 `INGEST_TOKEN`。它不注册在公开 Fastify API listener，也不能进入 Cloudflare Relay 路径表。仅 TrendRadar 可信容器调用。
-- 错误结构：`{"error":{"code":"VALIDATION_ERROR","message":"...","details":[]},"requestId":"..."}`。稳定码包含 `UNAUTHORIZED`、`NOT_FOUND`、`VALIDATION_ERROR`、`DATABASE_UNAVAILABLE`、`INTERNAL_ERROR`；不暴露堆栈/SQL。
+- 业务错误稳定字段为 `error.code` 与 `error.message`；`requestId` 仅在路由错误/校验错误中出现，认证失败不含 `requestId`。没有 `details` 字段。
+- 常见业务错误：400 `VALIDATION_ERROR`（参数/请求校验失败，含 `requestId`）、401 `UNAUTHORIZED`（缺少或无效 Bearer，不含 `requestId`）、文章/分析资源 404 `NOT_FOUND`（含 `requestId`）、503 `DATABASE_UNAVAILABLE`（含 `requestId`）、500 `INTERNAL_ERROR`（含 `requestId`）。数据库错误不会返回连接细节、SQL 或堆栈。
+- 未注册的路径使用 Fastify 默认 404：`{"message":"Route <METHOD>:<path> not found","error":"Not Found","statusCode":404}`，它与文章资源的业务 404 不同，也不含 `requestId`。`/api/v1/health` 的数据库不可用是专用 503 结构 `{"status":"error","database":"unavailable","service":"trendradar-intelligence"}`。
 
 ## 分页
 
@@ -33,3 +36,7 @@
 ## 兼容和权限
 
 新增可选响应字段为向后兼容；改名/改类型/删除字段须新版本。客户端忽略未知字段。Relay 将来仅允许 GET 上述新闻/分类/来源/搜索/health 路由，拒绝任意路径、写方法、`internal` 前缀和任意目标主机。Web 不经 Relay；PostgreSQL 永不 publish 到公网。
+
+## iOS V1 快照
+
+当前 iOS API V1 契约快照见 [`docs/ios/API_CONTRACT_V1.md`](ios/API_CONTRACT_V1.md)，机器可读定义见 [`docs/ios/openapi-v1.json`](ios/openapi-v1.json)。OpenAPI 从 Fastify 注册的 schema 导出；运行 `cd backend && npm run --silent openapi:export > ../docs/ios/openapi-v1.json` 可重建。该命令只注册路由，不连接数据库。部署 API 的 OpenAPI 可通过 `/documentation/json` 只读对照。

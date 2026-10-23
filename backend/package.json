@@ -10,6 +10,7 @@
     "migrate": "node dist/src/db/migrate.js",
     "migrate:dev": "tsx src/db/migrate.ts",
     "test": "vitest run",
+    "openapi:export": "tsx scripts/export-openapi.ts",
     "lint": "eslint src test",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

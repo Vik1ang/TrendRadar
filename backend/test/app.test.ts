@@ -57,11 +57,86 @@ describe('Fastify API boundary', () => {
     expect(response.body).not.toContain('private connection detail');
   });
 
+  it('maps unexpected read failures to a stable 500 without exposing internals', async () => {
+    const fakePool = {
+      query: async () => { throw new Error('private query detail'); },
+      connect: async () => { throw new Error('unexpected database transaction'); },
+    } as unknown as Pool;
+    const app = await createTestApp(fakePool);
+    const response = await app.inject({
+      method: 'GET', url: '/api/v1/news?limit=1', headers: { authorization: 'Bearer test-token' },
+    });
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
+    expect(response.json().requestId).toEqual(expect.any(String));
+    expect(response.body).not.toContain('private query detail');
+    expect(response.json().error).not.toHaveProperty('details');
+  });
+
   it('rejects unauthenticated business reads', async () => {
     const app = await createTestApp();
     const response = await app.inject({ method: 'GET', url: '/api/v1/news' });
     expect(response.statusCode).toBe(401);
     expect(response.json().error.code).toBe('UNAUTHORIZED');
+  });
+
+  it('preserves the actual 400, 401, and article 404 error payloads', async () => {
+    const app = await createTestApp();
+
+    const unauthorized = await app.inject({ method: 'GET', url: '/api/v1/news' });
+    expect(unauthorized.statusCode).toBe(401);
+    expect(unauthorized.json()).toEqual({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } });
+    expect(unauthorized.json()).not.toHaveProperty('requestId');
+    expect(unauthorized.json().error).not.toHaveProperty('details');
+
+    const invalid = await app.inject({
+      method: 'GET', url: '/api/v1/news?limit=0', headers: { authorization: 'Bearer test-token' },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR', message: 'Invalid request parameters' } });
+    expect(invalid.json().requestId).toEqual(expect.any(String));
+    expect(invalid.json().error).not.toHaveProperty('details');
+
+    const emptyPool = {
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => { throw new Error('unexpected database transaction'); },
+    } as unknown as Pool;
+    const missingArticleApp = await createTestApp(emptyPool);
+    const missingArticle = await missingArticleApp.inject({
+      method: 'GET', url: '/api/v1/news/11111111-1111-4111-8111-111111111111',
+      headers: { authorization: 'Bearer test-token' },
+    });
+    expect(missingArticle.statusCode).toBe(404);
+    expect(missingArticle.json()).toMatchObject({ error: { code: 'NOT_FOUND', message: 'Article not found' } });
+    expect(missingArticle.json().requestId).toEqual(expect.any(String));
+    expect(missingArticle.json().error).not.toHaveProperty('details');
+  });
+
+  it('keeps unknown-route 404 separate from the article error envelope', async () => {
+    const app = await createTestApp();
+    const response = await app.inject({ method: 'GET', url: '/api/v1/not-a-route' });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ error: 'Not Found', statusCode: 404 });
+    expect(response.json()).toHaveProperty('message');
+    expect(response.json()).not.toHaveProperty('requestId');
+  });
+
+  it('publishes route-specific standard error responses in OpenAPI', async () => {
+    const app = await createTestApp();
+    await app.ready();
+    type ErrorSchema = { required?: string[]; properties?: Record<string, unknown> };
+    type ErrorResponse = { content?: Record<string, { schema?: ErrorSchema }> };
+    type Operation = { responses: Record<string, ErrorResponse> };
+    const spec = app.swagger() as unknown as { paths: Record<string, { get: Operation }> };
+    const newsResponses = spec.paths['/api/v1/news']!.get.responses;
+    expect(Object.keys(newsResponses).sort()).toEqual(['200', '400', '401', '500', '503']);
+    expect(Object.keys(spec.paths['/api/v1/news/{id}']!.get.responses).sort()).toEqual(['200', '400', '401', '404', '500', '503']);
+    expect(Object.keys(spec.paths['/api/v1/categories']!.get.responses).sort()).toEqual(['200', '401', '500', '503']);
+    const unauthorized = newsResponses['401']!.content!['application/json']!.schema!;
+    const validation = newsResponses['400']!.content!['application/json']!.schema!;
+    expect(unauthorized.required).toEqual(['error']);
+    expect(validation.required).toEqual(['error', 'requestId']);
+    expect((validation.properties!.error as ErrorSchema).properties).not.toHaveProperty('details');
   });
 
   it('protects the system status endpoint with the read token', async () => {
