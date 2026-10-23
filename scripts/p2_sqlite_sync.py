@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from trendradar.intelligence.api import IngestionAPI
+from trendradar.intelligence.history_sync import inventory_summary, sync_history_records
 from trendradar.intelligence.normalize import build_batch
 from trendradar.intelligence.stream import ExportedSnapshot, parse_export_jsonl
 from trendradar.intelligence.sync import (
@@ -35,6 +36,7 @@ STATE_DIR = Path(os.environ.get(
     "P2_SYNC_STATE_DIR", str(Path.home() / ".local/state/trendradar-p2-sync")
 )).expanduser()
 CURSOR_PATH = STATE_DIR / "cursors.json"
+HISTORY_STATE_PATH = STATE_DIR / "history-state-v1.json"
 TREND_RADAR_CONTAINER = os.environ.get("P2_SYNC_TREND_RADAR_CONTAINER", "trendradar")
 COMPOSE_PROJECT = os.environ.get("P2_SYNC_COMPOSE_PROJECT", "trendradar-lan-acceptance")
 INGEST_CONTAINER = os.environ.get("P2_SYNC_INGEST_CONTAINER", "")
@@ -119,6 +121,48 @@ def _export() -> list[ExportedSnapshot]:
     except UnicodeDecodeError as exc:
         raise RuntimeError("SQLite export is not UTF-8 JSONL") from exc
     return parse_export_jsonl(lines)
+
+
+def _history_discover() -> dict[str, Any]:
+    command = [
+        "docker", "exec", "-i", TREND_RADAR_CONTAINER,
+        "python", "-",
+    ]
+    environment = dict(os.environ)
+    environment["P2_HISTORY_EXPORT_MODE"] = "discover"
+    output = _run(command, input_bytes=(ROOT / "scripts/p2_sqlite_history_export.py").read_bytes(),
+                  timeout=90, env=environment)
+    if len(output) > MAX_EXPORT_BYTES:
+        raise RuntimeError("SQLite history inventory exceeded 16 MiB safety limit")
+    try:
+        value = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("SQLite history discovery returned invalid JSON") from exc
+    if not isinstance(value, dict) or value.get("type") != "history_discovery" or value.get("version") != 1:
+        raise RuntimeError("SQLite history discovery response is invalid")
+    return value
+
+
+def _history_record(source: str, day: str, record_id: int) -> ExportedSnapshot:
+    command = [
+        "docker", "exec", "-i",
+        "-e", "P2_HISTORY_EXPORT_MODE=record",
+        "-e", f"P2_HISTORY_SOURCE={source}",
+        "-e", f"P2_HISTORY_DATE={day}",
+        "-e", f"P2_HISTORY_RECORD_ID={record_id}",
+        TREND_RADAR_CONTAINER, "python", "-",
+    ]
+    output = _run(command, input_bytes=(ROOT / "scripts/p2_sqlite_history_export.py").read_bytes(),
+                  timeout=45)
+    if len(output) > MAX_EXPORT_BYTES:
+        raise RuntimeError("SQLite history record exceeded export size limit")
+    try:
+        snapshots = parse_export_jsonl(output.decode("utf-8").splitlines())
+    except (UnicodeDecodeError, ValueError, TypeError) as exc:
+        raise RuntimeError("SQLite history record export is invalid") from exc
+    if len(snapshots) != 1:
+        raise RuntimeError("SQLite history export must contain exactly one capture record")
+    return snapshots[0]
 
 
 def _postgres_container() -> str:
@@ -260,20 +304,53 @@ def _apply(snapshots: list[ExportedSnapshot], max_articles: int) -> dict[str, An
     )
 
 
+def _apply_history(max_articles: int, max_records: int, max_seconds: float) -> dict[str, Any]:
+    legacy_pending = CURSOR_PATH.with_name("pending-sync.json")
+    if legacy_pending.exists():
+        raise RuntimeError("legacy frozen spool is still active; refusing to mix history progress")
+    _check_migration()
+    _check_ai_budget()
+    discovery = _history_discover()
+    api = DockerExecIngestionAPI(_ingestion_container())
+    return sync_history_records(
+        discovery.get("databases", []),
+        api,
+        HISTORY_STATE_PATH,
+        _history_record,
+        max_articles=max_articles,
+        max_records=max_records,
+        max_seconds=max_seconds,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="write the new snapshot to Intelligence PostgreSQL")
     mode.add_argument("--dry-run", action="store_true", help="read/normalize/compare without PostgreSQL writes")
+    mode.add_argument("--history-apply", action="store_true",
+                      help="catch up per-record SQLite history with a separate persistent cursor")
+    mode.add_argument("--history-dry-run", action="store_true",
+                      help="read-only inventory of all available per-record SQLite history")
     parser.add_argument(
         "--max-articles", type=int, default=20,
-        help="maximum normalized, deduplicated articles imported per --apply run (default: 20)",
+        help="maximum normalized, deduplicated articles imported per apply run (default: 20)",
     )
+    parser.add_argument("--max-records", type=int, default=100,
+                        help="maximum capture records completed per --history-apply run")
+    parser.add_argument("--max-seconds", type=float, default=240,
+                        help="maximum wall time spent in --history-apply")
     args = parser.parse_args()
     if not 1 <= args.max_articles <= 1000:
         parser.error("--max-articles must be between 1 and 1000")
-    if "--max-articles" in sys.argv[1:] and not args.apply:
-        parser.error("--max-articles can only be used with --apply")
+    if "--max-articles" in sys.argv[1:] and not (args.apply or args.history_apply):
+        parser.error("--max-articles can only be used with an apply mode")
+    if "--max-records" in sys.argv[1:] and not args.history_apply:
+        parser.error("--max-records can only be used with --history-apply")
+    if "--max-seconds" in sys.argv[1:] and not args.history_apply:
+        parser.error("--max-seconds can only be used with --history-apply")
+    if args.max_records < 1 or args.max_seconds <= 0:
+        parser.error("history run limits must be positive")
     STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(STATE_DIR, 0o700)
     lock_path = STATE_DIR / "sync.lock"
@@ -284,7 +361,14 @@ def main() -> int:
         except BlockingIOError:
             print(json.dumps({"mode": "skipped", "reason": "sync_already_running"}))
             return 0
-        if args.apply:
+        if args.history_dry_run:
+            discovery = _history_discover()
+            print(json.dumps({"mode": "history-dry-run", **inventory_summary(discovery.get("databases", []))},
+                             ensure_ascii=False, sort_keys=True))
+        elif args.history_apply:
+            result = _apply_history(args.max_articles, args.max_records, args.max_seconds)
+            print(json.dumps({"mode": "history-applied", **result}, ensure_ascii=False, sort_keys=True))
+        elif args.apply:
             pending_path = CURSOR_PATH.with_name("pending-sync.json")
             snapshots = [] if pending_path.exists() else _export()
             result = _apply(snapshots, args.max_articles)

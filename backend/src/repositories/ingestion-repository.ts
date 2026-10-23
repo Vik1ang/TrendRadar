@@ -224,7 +224,9 @@ export class IngestionRepository {
         if (upserted.inserted) insertedCount += 1;
         else updatedCount += 1;
 
-        if (upserted.inserted) {
+        // Metadata-only/history imports are explicitly not_requested and must
+        // not create deferred AI work just because an article is new.
+        if (upserted.inserted && article.analysisStatus === 'pending') {
           await client.query(
             'INSERT INTO article_analysis_jobs(article_id) VALUES ($1) ON CONFLICT (article_id) DO NOTHING',
             [persistedId],
