@@ -18,6 +18,16 @@
 4. 进程重启继续已冻结周期；源库中尚未处理的冻结记录消失、上界回退、游标锚点丢失或状态文件损坏均 fail-closed，不跳过、不推进。全局 `flock` 与旧快照同步共用一个锁，避免重叠。
 5. 旧 `pending-sync.json` 非空时，新 `--history-apply` 拒绝混用；旧 spool 格式没有改写。旧 spool 完成后，新算法从可读 SQLite 历史 ID 起点独立重放，依靠稳定业务 ID 幂等匹配，不信任旧的 `source/date` 游标。
 
+History apply 必须显式指定 `--history-start-date`、`--history-end-date` 与 `--max-total-articles`。日期窗口为闭区间，最多 31 天；无日期的 `--history-dry-run` 仍可用于只读全量 inventory，但 apply 不会默认扫描全部历史。`--max-total-articles` 是一个冻结追赶周期累计提交的规范化候选上限（跨 capture 的重复也计数），保存在 history state；每次调用另受 `--max-articles`、`--max-records`、`--max-seconds` 限制，每个 API 页最多 20 篇。达到总量上限会保留 pending/cursor，不能跳过；重复使用相同上限不再推进，只有显式提高上限才能继续。
+
+示例（仅说明参数，不表示生产已批准）：
+
+```bash
+uv run python scripts/p2_sqlite_sync.py --history-apply \
+  --history-start-date 2026-10-21 --history-end-date 2026-10-23 \
+  --max-total-articles 75000 --max-articles 20 --max-records 1 --max-seconds 240
+```
+
 History 导入使用 `analysisStatus=not_requested`。Ingestion API 现在仅在新增文章明确标为 `pending` 时创建分析任务；历史元数据默认不会制造未授权的 AI 队列。`not_requested` 文章不自动分析。Timer 与生产配置未改变。
 
 ## 2026-10-21 至 2026-10-23 覆盖复核

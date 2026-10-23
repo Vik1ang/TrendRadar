@@ -62,6 +62,20 @@ def _read_state(path: Path) -> dict[str, Any]:
         or (state.get("upper") is not None and not isinstance(state.get("upper"), dict))
     ):
         raise RuntimeError("history state is invalid; refusing to replace it")
+    for field in ("cycleArticleLimit", "cycleArticleCount"):
+        value = state.get(field)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+        ):
+            raise RuntimeError("history cycle article limit state is invalid")
+    if ("cycleArticleLimit" in state) != ("cycleArticleCount" in state):
+        raise RuntimeError("history cycle article limit state is incomplete")
+    if "cycleArticleLimit" in state and (
+        state["cycleArticleLimit"] < 1
+        or state["cycleArticleLimit"] > 100_000
+        or state["cycleArticleCount"] > state["cycleArticleLimit"]
+    ):
+        raise RuntimeError("history cycle article limit state is inconsistent")
     pending = state.get("pending")
     if pending is not None and (
         not isinstance(pending, dict)
@@ -128,6 +142,7 @@ def _validate_inventory(databases: Sequence[Mapping[str, Any]]) -> dict[str, Map
 
 def _freeze_cycle(
     state: dict[str, Any], inventory: Mapping[str, Mapping[str, Any]], state_path: Path,
+    max_total_articles: int | None,
 ) -> bool:
     cursors: dict[str, Any] = state["cursors"]
     for key, marker in cursors.items():
@@ -147,6 +162,12 @@ def _freeze_cycle(
             "records": [record for record in database["records"] if record["recordId"] > cursor_id],
         }
     if state["upper"] is not None:
+        stored_limit = state.get("cycleArticleLimit")
+        if max_total_articles is not None:
+            if not isinstance(stored_limit, int):
+                raise HistoryDiscoveryError("active history cycle has no persisted total article limit")
+            if max_total_articles < stored_limit:
+                raise HistoryDiscoveryError("history total article limit cannot be reduced mid-cycle")
         frozen = state["upper"]
         if not isinstance(frozen, dict) or not set(frozen).issubset(upper):
             raise HistoryDiscoveryError("a frozen SQLite history database disappeared during catch-up")
@@ -161,10 +182,18 @@ def _freeze_cycle(
             }
             if not required.issubset(available):
                 raise HistoryDiscoveryError(f"unprocessed SQLite crawl records disappeared for {key}")
+        if max_total_articles is not None:
+            assert isinstance(stored_limit, int)
+            if max_total_articles > stored_limit:
+                state["cycleArticleLimit"] = max_total_articles
+                _write_state(state_path, state)
         return False
 
     state["cycleId"] = f"{datetime.now(UTC).isoformat()}"
     state["upper"] = upper
+    if max_total_articles is not None:
+        state["cycleArticleLimit"] = max_total_articles
+        state["cycleArticleCount"] = 0
     _write_state(state_path, state)
     return True
 
@@ -249,6 +278,7 @@ def sync_history_records(
     max_records: int = 100,
     max_seconds: float = 240,
     batch_size: int = PAGE_SIZE,
+    max_total_articles: int | None = None,
 ) -> dict[str, Any]:
     """Catch up ordered capture records to a durable, frozen per-database upper.
 
@@ -259,6 +289,8 @@ def sync_history_records(
     """
     if not 1 <= max_articles <= 100_000:
         raise ValueError("max_articles must be between 1 and 100000")
+    if max_total_articles is not None and not 1 <= max_total_articles <= 100_000:
+        raise ValueError("max_total_articles must be between 1 and 100000")
     if not 1 <= max_records <= 100_000 or not 1 <= batch_size <= PAGE_SIZE:
         raise ValueError("record/page limits are invalid")
     if max_seconds <= 0:
@@ -267,15 +299,23 @@ def sync_history_records(
     state = _read_state(state_path)
     started = time.monotonic()
     processed_candidates = inserted = updated = completed_records = partial_records = 0
-    upper_created = _freeze_cycle(state, inventory, state_path)
+    upper_created = _freeze_cycle(state, inventory, state_path, max_total_articles)
     if not state["upper"]:
         state["upper"] = None
         state["cycleId"] = None
+        state.pop("cycleArticleLimit", None)
+        state.pop("cycleArticleCount", None)
         _write_state(state_path, state)
         return {"processedCount": 0, "insertedCount": 0, "updatedCount": 0,
                 "recordCount": 0, "complete": True, "upperFrozen": upper_created}
 
-    while processed_candidates < max_articles and completed_records < max_records:
+    total_limit = state.get("cycleArticleLimit")
+    total_processed = int(state.get("cycleArticleCount", 0))
+    while (
+        processed_candidates < max_articles
+        and completed_records < max_records
+        and (not isinstance(total_limit, int) or total_processed < total_limit)
+    ):
         if time.monotonic() - started >= max_seconds:
             break
         pending = state.get("pending")
@@ -300,7 +340,8 @@ def sync_history_records(
         articles: list[dict[str, Any]] = pending["articles"]
         start = pending["nextIndex"]
         remaining_run = max_articles - processed_candidates
-        end = min(start + batch_size, len(articles), start + remaining_run)
+        remaining_total = total_limit - total_processed if isinstance(total_limit, int) else len(articles)
+        end = min(start + batch_size, len(articles), start + remaining_run, start + remaining_total)
         if start < len(articles) and end == start:
             break
         batch = articles[start:end]
@@ -357,6 +398,9 @@ def sync_history_records(
             pending["committedArticleCount"] += len(batch)
             pending["nextIndex"] = end
             processed_candidates += len(batch)
+            total_processed += len(batch)
+            if isinstance(total_limit, int):
+                state["cycleArticleCount"] = total_processed
             inserted += page_inserted
             updated += page_updated
         if pending["nextIndex"] == len(articles):
@@ -367,6 +411,8 @@ def sync_history_records(
             if _next_record(state) is None:
                 state["upper"] = None
                 state["cycleId"] = None
+                state.pop("cycleArticleLimit", None)
+                state.pop("cycleArticleCount", None)
             _write_state(state_path, state)
         else:
             state["pending"] = pending
@@ -385,6 +431,9 @@ def sync_history_records(
         "pendingRecordIndex": active_pending.get("nextIndex") if active_pending else None,
         "pendingRecordTotal": len(active_pending["articles"]) if active_pending else None,
         "cycleUpperFrozen": bool(state.get("upper")),
+        "cycleProcessedCount": total_processed,
+        "cycleArticleLimit": total_limit,
+        "cycleLimitReached": isinstance(total_limit, int) and total_processed >= total_limit,
         "complete": is_complete,
         "upperFrozen": upper_created,
         "elapsedSeconds": round(time.monotonic() - started, 3),

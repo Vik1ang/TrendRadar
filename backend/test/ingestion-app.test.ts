@@ -280,7 +280,8 @@ describe('private ingestion API', () => {
       },
     });
     expect(response.statusCode).toBe(201);
-    expect(statements.some((sql) => sql.includes('INSERT INTO article_analysis_jobs'))).toBe(true);
+    const jobInsert = statements.find((sql) => sql.includes('INSERT INTO article_analysis_jobs'));
+    expect(jobInsert).toContain('ON CONFLICT (article_id) DO NOTHING');
   });
 
   it('does not create analysis jobs for metadata-only history imports', async () => {

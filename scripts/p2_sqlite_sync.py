@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -123,11 +123,32 @@ def _export() -> list[ExportedSnapshot]:
     return parse_export_jsonl(lines)
 
 
-def _history_discover() -> dict[str, Any]:
+def _history_dates(start_date: str | None, end_date: str | None) -> list[str] | None:
+    if start_date is None and end_date is None:
+        return None
+    if start_date is None or end_date is None:
+        raise ValueError("both history start and end dates are required")
+    try:
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
+    except ValueError as exc:
+        raise ValueError("history dates must use YYYY-MM-DD") from exc
+    if start.isoformat() != start_date or end.isoformat() != end_date or start > end:
+        raise ValueError("history date range is invalid")
+    if (end - start).days > 30:
+        raise ValueError("history date range cannot exceed 31 days")
+    return [(start + timedelta(days=offset)).isoformat()
+            for offset in range((end - start).days + 1)]
+
+
+def _history_discover(start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+    dates = _history_dates(start_date, end_date)
     command = [
         "docker", "exec", "-i", "-e", "P2_HISTORY_EXPORT_MODE=discover", TREND_RADAR_CONTAINER,
-        "python", "-",
     ]
+    if dates is not None:
+        command[5:5] = ["-e", f"P2_HISTORY_DATES={','.join(dates)}"]
+    command.extend(["python", "-"])
     output = _run(command, input_bytes=(ROOT / "scripts/p2_sqlite_history_export.py").read_bytes(),
                   timeout=90)
     if len(output) > MAX_EXPORT_BYTES:
@@ -302,13 +323,16 @@ def _apply(snapshots: list[ExportedSnapshot], max_articles: int) -> dict[str, An
     )
 
 
-def _apply_history(max_articles: int, max_records: int, max_seconds: float) -> dict[str, Any]:
+def _apply_history(
+    max_articles: int, max_records: int, max_seconds: float, max_total_articles: int,
+    start_date: str, end_date: str,
+) -> dict[str, Any]:
     legacy_pending = CURSOR_PATH.with_name("pending-sync.json")
     if legacy_pending.exists():
         raise RuntimeError("legacy frozen spool is still active; refusing to mix history progress")
     _check_migration()
     _check_ai_budget()
-    discovery = _history_discover()
+    discovery = _history_discover(start_date, end_date)
     api = DockerExecIngestionAPI(_ingestion_container())
     return sync_history_records(
         discovery.get("databases", []),
@@ -318,6 +342,7 @@ def _apply_history(max_articles: int, max_records: int, max_seconds: float) -> d
         max_articles=max_articles,
         max_records=max_records,
         max_seconds=max_seconds,
+        max_total_articles=max_total_articles,
     )
 
 
@@ -338,6 +363,10 @@ def main() -> int:
                         help="maximum capture records completed per --history-apply run")
     parser.add_argument("--max-seconds", type=float, default=240,
                         help="maximum wall time spent in --history-apply")
+    parser.add_argument("--max-total-articles", type=int,
+                        help="persisted total candidate cap for the frozen history cycle")
+    parser.add_argument("--history-start-date", help="inclusive YYYY-MM-DD history boundary")
+    parser.add_argument("--history-end-date", help="inclusive YYYY-MM-DD history boundary")
     args = parser.parse_args()
     if not 1 <= args.max_articles <= 1000:
         parser.error("--max-articles must be between 1 and 1000")
@@ -347,6 +376,23 @@ def main() -> int:
         parser.error("--max-records can only be used with --history-apply")
     if "--max-seconds" in sys.argv[1:] and not args.history_apply:
         parser.error("--max-seconds can only be used with --history-apply")
+    if args.history_apply and args.max_total_articles is None:
+        parser.error("--history-apply requires --max-total-articles")
+    if args.max_total_articles is not None and not args.history_apply:
+        parser.error("--max-total-articles can only be used with --history-apply")
+    if args.max_total_articles is not None and not 1 <= args.max_total_articles <= 100_000:
+        parser.error("--max-total-articles must be between 1 and 100000")
+    if args.history_apply and (args.history_start_date is None or args.history_end_date is None):
+        parser.error("--history-apply requires --history-start-date and --history-end-date")
+    if (args.history_start_date is None) != (args.history_end_date is None):
+        parser.error("both --history-start-date and --history-end-date are required")
+    if (args.history_start_date is not None) and not (args.history_apply or args.history_dry_run):
+        parser.error("history date bounds can only be used with a history mode")
+    if args.history_start_date is not None:
+        try:
+            _history_dates(args.history_start_date, args.history_end_date)
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.max_records < 1 or args.max_seconds <= 0:
         parser.error("history run limits must be positive")
     STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -360,11 +406,13 @@ def main() -> int:
             print(json.dumps({"mode": "skipped", "reason": "sync_already_running"}))
             return 0
         if args.history_dry_run:
-            discovery = _history_discover()
+            discovery = _history_discover(args.history_start_date, args.history_end_date)
             print(json.dumps({"mode": "history-dry-run", **inventory_summary(discovery.get("databases", []))},
                              ensure_ascii=False, sort_keys=True))
         elif args.history_apply:
-            result = _apply_history(args.max_articles, args.max_records, args.max_seconds)
+            result = _apply_history(args.max_articles, args.max_records, args.max_seconds,
+                                    args.max_total_articles,
+                                    args.history_start_date, args.history_end_date)
             print(json.dumps({"mode": "history-applied", **result}, ensure_ascii=False, sort_keys=True))
         elif args.apply:
             pending_path = CURSOR_PATH.with_name("pending-sync.json")

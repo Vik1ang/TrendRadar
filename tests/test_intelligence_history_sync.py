@@ -135,6 +135,47 @@ def test_frozen_upper_excludes_newer_capture_until_next_cycle(tmp_path: Path) ->
     assert len(api.persisted) == 2
 
 
+def test_total_candidate_limit_persists_across_runs_and_requires_explicit_increase(tmp_path: Path) -> None:
+    snapshot = _news("2026-10-21", 1, "08:00", [
+        NewsItem(title=f"article {n}", source_id="baidu", url=f"https://e.test/{n}")
+        for n in range(2)
+    ])
+    api = IdempotentAPI()
+    api.lose_ack_once = True
+    state_path = tmp_path / "history.json"
+    exporter = lambda *_: snapshot
+    with pytest.raises(RuntimeError, match="response lost"):
+        sync_history_records(
+            _inventory([snapshot]), cast(IngestionAPI, api), state_path, exporter,
+            max_articles=20, max_total_articles=1,
+        )
+    assert json.loads(state_path.read_text())["cycleArticleCount"] == 0
+    first = sync_history_records(
+        _inventory([snapshot]), cast(IngestionAPI, api), state_path, exporter,
+        max_articles=20, max_total_articles=1,
+    )
+    assert first["processedCount"] == 1
+    assert first["cycleLimitReached"] is True
+    assert json.loads(state_path.read_text())["cursors"] == {}
+
+    stopped = sync_history_records(
+        _inventory([snapshot]), cast(IngestionAPI, api), state_path, exporter,
+        max_articles=20, max_total_articles=1,
+    )
+    assert stopped["processedCount"] == 0
+    assert stopped["complete"] is False
+    assert len(api.persisted) == 1
+
+    extended = sync_history_records(
+        _inventory([snapshot]), cast(IngestionAPI, api), state_path, exporter,
+        max_articles=20, max_total_articles=2,
+    )
+    assert extended["processedCount"] == 1
+    assert extended["complete"] is True
+    assert len(api.persisted) == 2
+    assert json.loads(state_path.read_text())["cursors"]["news:2026-10-21"]["recordId"] == 1
+
+
 def test_missing_unprocessed_capture_fails_closed_and_rss_delta_is_explicit(tmp_path: Path) -> None:
     rss = ExportedSnapshot(
         "rss", "2026-10-23", {"recordId": 4, "crawlTime": "11:00", "createdAt": "stamp"},
