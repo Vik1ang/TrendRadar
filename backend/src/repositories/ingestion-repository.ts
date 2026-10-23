@@ -211,8 +211,11 @@ export class IngestionRepository {
              updated_at=now(),
              content_status=CASE WHEN EXCLUDED.content_status='title_only' AND articles.summary IS NOT NULL
                THEN articles.content_status ELSE EXCLUDED.content_status END,
-             analysis_status=CASE WHEN EXCLUDED.analysis_status IN ('pending','processing','not_requested') AND articles.analysis_status IN ('completed','failed')
-               THEN articles.analysis_status ELSE EXCLUDED.analysis_status END
+             analysis_status=CASE
+               WHEN EXCLUDED.analysis_status='not_requested' THEN articles.analysis_status
+               WHEN EXCLUDED.analysis_status IN ('pending','processing') AND articles.analysis_status IN ('completed','failed')
+                 THEN articles.analysis_status
+               ELSE EXCLUDED.analysis_status END
            RETURNING id, (xmax = 0) AS inserted`,
           [article.id, article.sourceId, article.title, article.url ?? null, article.normalizedUrl ?? null,
             article.dedupeKey, article.summary ?? null, article.publishedAt ?? null, article.firstSeenAt,

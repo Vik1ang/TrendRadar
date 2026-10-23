@@ -125,13 +125,11 @@ def _export() -> list[ExportedSnapshot]:
 
 def _history_discover() -> dict[str, Any]:
     command = [
-        "docker", "exec", "-i", TREND_RADAR_CONTAINER,
+        "docker", "exec", "-i", "-e", "P2_HISTORY_EXPORT_MODE=discover", TREND_RADAR_CONTAINER,
         "python", "-",
     ]
-    environment = dict(os.environ)
-    environment["P2_HISTORY_EXPORT_MODE"] = "discover"
     output = _run(command, input_bytes=(ROOT / "scripts/p2_sqlite_history_export.py").read_bytes(),
-                  timeout=90, env=environment)
+                  timeout=90)
     if len(output) > MAX_EXPORT_BYTES:
         raise RuntimeError("SQLite history inventory exceeded 16 MiB safety limit")
     try:
