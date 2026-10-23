@@ -43,6 +43,12 @@
 - **阶段判断：P2 生产闭环未通过。** 缺少 Adapter 与运行中 Cron 的生产接通、实时增量/分类/去重证据，且 migration/API 代码尚未部署。生产启用还需要经批准安排一次原版 TrendRadar 容器更新/重启（该服务 `IMMEDIATE_RUN=true`，会立即采集一次）；AI 长期预算需要明确每日调用量/费用上限。自动分析保持关闭，不能用单测或历史单篇分析冒充生产定时闭环。
 - 详细检查、测试和待办见 `docs/P2_PRODUCTION_PIPELINE_REPORT.md`。
 
+### P2 生产接入及历史追赶最新状态（2026-10-23）
+
+- 此前按授权完成 Migration 002、定向更新 Ingestion API，并对冻结 Run `beadd52d-893e-4460-9d0d-96f1e04dbda4` 做了有界生产同步；最新已记录生产基线为 1,185 篇文章、3 条 AI 分析、733 个分析队列任务，分析尝试为 0。冻结 spool `nextIndex=740/1187`，仍有 447 条候选；不得将当前进度视作整个 spool 完成。
+- `FIX-01` 已修复 nullable `publishedAt`/`summary` 契约。P2-HISTORY-01 新增逐 `crawl_record` 历史追赶实现和 RSS 末次观测 delta 扫描；三日真实 SQLite 样本在隔离 PostgreSQL/Fastify 完成 14,030 个唯一文章的故障恢复与幂等演练，模型调用为 0。详见 `docs/P2_HISTORY_CATCHUP.md`。
+- 历史算法尚未部署或用于生产写入；未处理完旧 spool 前拒绝混用新 history apply。Timer 未启用，自动 AI 仍关闭且每日预算为 0。**P2 生产闭环仍未通过**：旧 spool B3、历史补录、自动同步部署及至少两个真实定时采集周期仍未验收，均需各自授权。
+
 ## P3 — React Web
 
 1. 创建 `web/` React + TypeScript、统一 API client 和路由布局。
@@ -93,9 +99,9 @@ P4-0 审查结论（2026-10-21）：Relay 草稿 Worker/DO、Agent、allowlist�
 ## 已知风险 / 下一步
 
 - `.env.example` 中是示例值；上线前必须替换独立强随机密钥并确认 LAN 防火墙仅允许可信设备访问 Web。
-- 当前缺少 Orca Relay 源码，无法复用历史实现；需要后续用独立凭据自建并测试，不影响 P1-P3。
+- 当前缺少 Orca Relay 原始源码，无法复用其实现；TrendRadar 使用独立 Worker/DO 与凭据，真实 Relay MVP 已完成，不影响 P1-P3。
 - 真实模型生成已对单篇标题级新闻验收并持久化；另外已在一次性 runner 中以“每次最多 1 篇、无重试/无 fallback、顺序执行”真实试跑 `python -m trendradar` 自动采集→分析→数据库闭环，确认 274 条当次候选延后；原生产 cron/TrendRadar 服务的 intelligence 开关仍关闭，未观察 cron 定时触发。不得直接对全部 255 条存量新闻批量分析；生产启用前仍需明确日额度/成本预算、失败重试策略与调度限额，并由运维显式调整部署配置。
-- 未提供 Cloudflare 凭据/代理网络授权，尚未部署 Worker/DO 或做真实 WSS 外网访问；P4 需先核实计划用量和运行成本。
+- Cloudflare Worker/DO 与 Linux Relay Agent 已真实部署并完成只读 API 端到端验证；Relay 两小时长期稳定性、代理中断恢复、Dashboard 实际剩余额度及 iOS 真机双线路仍未验收。P4 MVP 不再是“缺凭据/未部署”状态，详见 `docs/P4_RELAY_STABILITY_REPORT.md` 与 `docs/RELAY.md`。
 - 数据库备份/恢复已在临时隔离 PostgreSQL 完成往返演练；仍需在正式部署环境安排例行备份、重启/数据库故障注入、LAN 防火墙及模型失败验收。
 
 ### P2 生产接入续查（2026-10-22）
