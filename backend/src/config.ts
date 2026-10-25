@@ -1,8 +1,11 @@
+import { isIP } from 'node:net';
+
 export interface AppConfig {
   host: string;
   port: number;
   databaseUrl: string;
   apiReadToken: string;
+  trustedProxyIps?: string[];
 }
 
 export interface IngestionConfig {
@@ -43,11 +46,19 @@ function boundedInteger(name: string, fallback: number, max: number): number {
 }
 
 export function loadConfig(): AppConfig {
+  const trustedProxyIps = (process.env.API_TRUSTED_PROXY_IPS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (trustedProxyIps.some((address) => isIP(address) === 0)) {
+    throw new Error('API_TRUSTED_PROXY_IPS must contain only exact IPv4 or IPv6 addresses');
+  }
   return {
     host: process.env.API_HOST ?? '127.0.0.1',
     port: integer('API_PORT', 3001),
     databaseUrl: required('DATABASE_URL'),
     apiReadToken: required('API_READ_TOKEN'),
+    ...(trustedProxyIps.length ? { trustedProxyIps } : {}),
   };
 }
 

@@ -1,0 +1,47 @@
+[
+  {
+    "attachments": [
+      {
+        "configurationName": "Test Scheme Action",
+        "deviceId": "876C19E0-3E1C-4826-A517-FA3A052B5D45",
+        "deviceName": "iPhone 18 Pro",
+        "exportedFileName": "detail.png",
+        "isAssociatedWithFailure": false,
+        "suggestedHumanReadableName": "detail.png",
+        "timestamp": 1792748718.121
+      }
+    ],
+    "testIdentifier": "TrendRadarUITests/testDetailsNullsAnalysisStatesAndRetry()",
+    "testIdentifierURL": "test://com.apple.xcode/TrendRadar/TrendRadarUITests/TrendRadarUITests/testDetailsNullsAnalysisStatesAndRetry"
+  },
+  {
+    "attachments": [
+      {
+        "configurationName": "Test Scheme Action",
+        "deviceId": "876C19E0-3E1C-4826-A517-FA3A052B5D45",
+        "deviceName": "iPhone 18 Pro",
+        "exportedFileName": "home.png",
+        "isAssociatedWithFailure": false,
+        "suggestedHumanReadableName": "home.png",
+        "timestamp": 1792748791.399
+      }
+    ],
+    "testIdentifier": "TrendRadarUITests/testNewsChannelsRefreshAndUncategorizedArticle()",
+    "testIdentifierURL": "test://com.apple.xcode/TrendRadar/TrendRadarUITests/TrendRadarUITests/testNewsChannelsRefreshAndUncategorizedArticle"
+  },
+  {
+    "attachments": [
+      {
+        "configurationName": "Test Scheme Action",
+        "deviceId": "876C19E0-3E1C-4826-A517-FA3A052B5D45",
+        "deviceName": "iPhone 18 Pro",
+        "exportedFileName": "search.png",
+        "isAssociatedWithFailure": false,
+        "suggestedHumanReadableName": "search.png",
+        "timestamp": 1792748851.809
+      }
+    ],
+    "testIdentifier": "TrendRadarUITests/testSearchInputClearNoResultsAndSearchToDetail()",
+    "testIdentifierURL": "test://com.apple.xcode/TrendRadar/TrendRadarUITests/TrendRadarUITests/testSearchInputClearNoResultsAndSearchToDetail"
+  }
+]

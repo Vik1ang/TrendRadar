@@ -8,6 +8,7 @@
     "dev": "tsx watch src/server.ts",
     "start": "node dist/src/server.js",
     "migrate": "node dist/src/db/migrate.js",
+    "device:auth": "node dist/src/device-auth-cli.js",
     "migrate:dev": "tsx src/db/migrate.ts",
     "test": "vitest run",
     "openapi:export": "tsx scripts/export-openapi.ts",

@@ -1,0 +1,39 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "TrendRadar Device Authentication API",
+    "version": "2.0.0",
+    "description": "Additive device pairing contract. Business reads remain defined by the frozen API V1 contract. Pairing is LAN HTTPS only and is not available through Cloudflare Relay."
+  },
+  "servers": [{ "url": "https://{lanApiHost}", "variables": { "lanApiHost": { "default": "news.example.invalid" } } }],
+  "paths": {
+    "/api/v2/devices/pair": {
+      "post": {
+        "operationId": "pairDevice",
+        "summary": "Redeem an operator-issued one-time pairing code",
+        "description": "HTTPS only. Not exposed by the Relay. Pairing code must be in the Authorization header and is single-use.",
+        "security": [{ "pairingCode": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PairRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Device credential issued once; store only in Keychain.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PairResponse" } } } },
+          "400": { "description": "HTTPS required, device label mismatch, or invalid request." },
+          "401": { "description": "Pairing code invalid, expired, or already redeemed." },
+          "429": { "description": "Pairing attempt rate limit exceeded." },
+          "503": { "description": "Pairing store unavailable." }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "pairingCode": { "type": "http", "scheme": "Pairing", "description": "Operator-issued one-time code; 10-minute lifetime and one successful redemption." }
+    },
+    "schemas": {
+      "PairRequest": { "type": "object", "additionalProperties": false, "required": ["deviceName"], "properties": { "deviceName": { "type": "string", "minLength": 1, "maxLength": 80 } } },
+      "PairResponse": { "type": "object", "additionalProperties": false, "required": ["deviceId", "deviceName", "accessToken", "expiresAt", "scopes"], "properties": { "deviceId": { "type": "string", "format": "uuid" }, "deviceName": { "type": "string" }, "accessToken": { "type": "string", "pattern": "^trd_dev_[A-Za-z0-9_-]{43}$" }, "expiresAt": { "type": "string", "format": "date-time" }, "scopes": { "type": "array", "items": { "const": "news:read" } } } }
+    }
+  }
+}

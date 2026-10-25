@@ -26,6 +26,7 @@ services:
       API_PORT: 3001
       DATABASE_URL: postgres://${POSTGRES_USER:-intelligence}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-intelligence}
       API_READ_TOKEN: ${API_READ_TOKEN:?Set API_READ_TOKEN in .env}
+      API_TRUSTED_PROXY_IPS: ${API_TRUSTED_PROXY_IPS:-}
     ports:
       - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-3001}:3001"
     depends_on:
