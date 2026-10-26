@@ -6,8 +6,25 @@ const READ_PATHS = [
   new RegExp(`^/api/v1/news/${UUID}(?:/analysis)?$`, 'i'),
 ];
 
+const DEVICE_READ_PATHS = [
+  /^\/api\/v1\/news$/,
+  /^\/api\/v1\/search$/,
+  new RegExp(`^/api/v1/news/${UUID}(?:/analysis)?$`, 'i'),
+  /^\/api\/v1\/(categories|sources)$/,
+  /^\/api\/v1\/status$/,
+];
+
 export function allowedReadPath(pathname: string): boolean {
   return pathname.length <= MAX_URL_LENGTH && READ_PATHS.some((pattern) => pattern.test(pathname));
+}
+
+export function allowedReadRequest(method: string, pathname: string): boolean {
+  return method === 'GET' && pathname.startsWith('/api/v1/');
+}
+
+/** Do not forward device-shaped bearers to unauthenticated health; Fastify enforces status scope. */
+export function allowedDeviceReadPath(pathname: string): boolean {
+  return DEVICE_READ_PATHS.some((pattern) => pattern.test(pathname));
 }
 
 export function allowedReadQuery(query: URLSearchParams): boolean {

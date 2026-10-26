@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
-import { allowedReadPath, allowedReadQuery } from './allowlist';
+import { allowedDeviceReadPath, allowedReadPath, allowedReadQuery, allowedReadRequest } from './allowlist';
+import { clientReadAuthorizationAccepted, isDeviceBearerCandidate, tokenMatches } from './client-auth';
 import { RequestCorrelator } from './correlator';
 import { nextRateBucket } from './rate-limit';
 
@@ -7,19 +8,6 @@ export interface Env {
   RELAY_HUB: DurableObjectNamespace<RelayHub>;
   CLIENT_API_TOKEN: string;
   RELAY_AGENT_TOKEN: string;
-}
-
-async function tokenMatches(candidate: string | null, expected: string): Promise<boolean> {
-  if (!candidate || !expected || candidate.length > 512) return false;
-  const encoder = new TextEncoder();
-  const [left, right] = await Promise.all([
-    crypto.subtle.digest('SHA-256', encoder.encode(candidate)),
-    crypto.subtle.digest('SHA-256', encoder.encode(expected)),
-  ]);
-  const a = new Uint8Array(left); const b = new Uint8Array(right);
-  let difference = 0;
-  for (let index = 0; index < a.length; index += 1) difference |= a[index]! ^ b[index]!;
-  return difference === 0 && candidate.length === expected.length;
 }
 
 function error(status: number, code: string, message: string): Response {
@@ -52,8 +40,10 @@ export default {
       if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return error(426, 'WEBSOCKET_REQUIRED', 'WebSocket upgrade required');
       return env.RELAY_HUB.get(env.RELAY_HUB.idFromName('single-user-api')).fetch(request);
     }
-    if (request.method !== 'GET' || !url.pathname.startsWith('/api/v1/')) return error(404, 'NOT_FOUND', 'Route not found');
-    if (!(await tokenMatches(request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? null, env.CLIENT_API_TOKEN))) {
+    if (!allowedReadRequest(request.method, url.pathname)) return error(404, 'NOT_FOUND', 'Route not found');
+    const authorization = request.headers.get('authorization');
+    if (!(await clientReadAuthorizationAccepted(authorization, env.CLIENT_API_TOKEN))
+      || (isDeviceBearerCandidate(authorization) && !allowedDeviceReadPath(url.pathname))) {
       return error(401, 'UNAUTHORIZED', 'Authentication required');
     }
     if (!allowedReadPath(url.pathname)) return error(403, 'PATH_NOT_ALLOWED', 'API path is not allowed through Relay');

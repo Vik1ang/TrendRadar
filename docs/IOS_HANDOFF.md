@@ -25,7 +25,7 @@
 
 当前证书、DNS 控制权和防火墙授权未取得，故上述是实施方案，不是已完成部署。共享 `API_READ_TOKEN` 也不应成为未来 iOS 的凭据；待设备凭据实现后再启用客户端 API。
 
-## 设备级认证方案（仅设计；未替换生产认证）
+## 设备级认证方案（IOS-AUTH-01 增量实现；未部署生产）
 
 ### 现状
 
@@ -34,15 +34,9 @@
 - Relay Worker 入口当前校验 `CLIENT_API_TOKEN`，并将原始授权头经 Agent 透传；Fastify 做最终校验。
 - `RELAY_AGENT_TOKEN` 是独立机器凭据；`INGEST_TOKEN` 用于独立私有导入 listener。二者不与客户端认证混用。
 
-### 最小增量设计
+实现细节、独立 API v2 契约和操作方式见 [`DEVICE_AUTH_V2.md`](DEVICE_AUTH_V2.md)、[`DEVICE_AUTH_V2.openapi.json`](DEVICE_AUTH_V2.openapi.json) 与 [`LAN_HTTPS_DEVICE_AUTH.md`](LAN_HTTPS_DEVICE_AUTH.md)。代码已增加独立设备表、哈希凭据、一次性 HTTPS 配对兑换、本地签发/列出/撤销 CLI、Fastify 设备读 scope 校验以及 Worker/Agent 严格格式透传兼容；旧 `API_READ_TOKEN`、`CLIENT_API_TOKEN`、`RELAY_AGENT_TOKEN`、`INGEST_TOKEN` 的认证职责不变。配对不经 Relay，认证最终由 Fastify 校验。
 
-1. 添加 `device_credentials` migration：稳定 `id`、设备标签、`token_hash`（唯一索引）、`created_at`、`expires_at`、`revoked_at`、可选 `last_used_at`。每个 iOS 安装单独签发 256-bit 随机 opaque Bearer（例如 `trd_dev_` 前缀）；只在签发时显示明文一次，PostgreSQL 只保存其 SHA-256 摘要。
-2. 仅在受信 Linux 主机提供本地管理 CLI/脚本用于签发、列出元数据、撤销、过期清理；不增加可经公网 Relay 调用的签发/管理接口。丢失设备通过 `revoked_at` 立即拒绝；过期凭据返回 401，重新签发新设备凭据。
-3. Fastify `authenticateRead` 增量接受两类凭据：现有静态 `API_READ_TOKEN`（保持 Web 兼容）或数据库中未过期/未撤销的设备凭据。两个 Endpoint 最终都由这段 Backend 逻辑授权；不信任客户端身份/角色请求头。私有 ingestion 仍使用独立 `INGEST_TOKEN`。
-4. Relay Worker 保留现有 `CLIENT_API_TOKEN` 兼容路径；后续为设备凭据增加严格长度/字符格式识别，只把格式合规且符合既有只读 allowlist 的原始 Bearer 透传给 Fastify。设备 token 的存在、有效期和撤销状态由 Fastify 最终验证，Worker 不保存设备列表或新闻业务数据；沿用 dispatch/并发限制以约束无效凭据流量。Agent 仍只使用独立 `RELAY_AGENT_TOKEN`。
-5. 迁移时先部署 DB migration 和 Backend 双认证，再升级 Worker 的兼容转发，执行单台测试设备签发/过期/撤销测试；确认 Web 静态 Token 与 Relay Bridge 不变后，再在 iOS 使用独立设备 Bearer。失败可回滚为仅旧静态 Token，不需要重置 `API_READ_TOKEN`。
-
-此方案当前**未实现**。iOS 不得内置 `API_READ_TOKEN`、`CLIENT_API_TOKEN`、`RELAY_AGENT_TOKEN`、`INGEST_TOKEN`，也不得复用其他设备 Token。设备凭据保存于 iOS Keychain；首版可以由管理员手动签发，不要求建设 SaaS 登录或刷新服务。
+当前**未应用 Migration 003、未部署 Worker/Relay/Fastify 配置、未签发设备凭据、未完成 LAN HTTPS**。在此工作环境内只有 fake Pool/app.inject 隔离测试，Docker/PostgreSQL 本地程序不可用，因此数据库迁移和并发/多设备生命周期尚未在 PostgreSQL 上实测。需待 staging/生产部署授权与真实域名/证书/代理信息后执行隔离部署验证。iOS 不得内置或复用任何共享服务 Token；设备 Token 应只保存在 Keychain。当前配对仅支持 LAN HTTPS；没有自动刷新端点，过期后需运维重新配对。
 
 ## 网络探测和线路选择
 

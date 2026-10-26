@@ -4,6 +4,7 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import type { IngestionConfig } from './config.js';
 import { validBearer } from './auth.js';
+import { DeviceAuthRepository } from './device-auth.js';
 import { IngestionRepository } from './repositories/ingestion-repository.js';
 import { registerIngestionRoutes } from './routes/ingestion.js';
 
@@ -15,10 +16,16 @@ declare module 'fastify' {
 
 export async function buildIngestionApp(pool: Pool, config: IngestionConfig): Promise<FastifyInstance> {
   const app = Fastify({ bodyLimit: 10 * 1024 * 1024, logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
+  const deviceAuth = new DeviceAuthRepository(pool);
   app.decorate('authenticateIngestion', async (request, reply) => {
-    if (!validBearer(request.headers.authorization, config.ingestionToken)) {
-      await reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' }, requestId: request.id });
+    if (validBearer(request.headers.authorization, config.ingestionToken)) return;
+    const token = request.headers.authorization?.match(/^Bearer\s+([^\s]+)$/i)?.[1];
+    const device = token ? await deviceAuth.authenticate(token, false) : null;
+    if (device) {
+      await reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Device credentials cannot access ingestion resources' }, requestId: request.id });
+      return;
     }
+    await reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' }, requestId: request.id });
   });
   app.setErrorHandler((error, request, reply) => {
     request.log.error({ err: error }, 'Internal ingestion request failed');

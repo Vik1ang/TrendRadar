@@ -6,6 +6,7 @@ test('only fixed read API resources can be sent through the relay agent', () => 
   assert.equal(isAllowedApiPath('/api/v1/search?q=国债'), true);
   assert.equal(isAllowedApiPath('/api/v1/news/0f8fad5b-d9cb-469f-a165-70867728950e/analysis'), true);
   assert.equal(isAllowedApiPath('/api/v1/internal/ingestion'), false);
+  assert.equal(isAllowedApiPath('/api/v2/devices/pair'), false);
   assert.equal(isAllowedApiPath('//other.example/api/v1/news'), false);
   assert.equal(isAllowedApiPath('/api/v1/news/uuid'), false);
   assert.equal(isAllowedApiPath('/api/v1/news?target=http://127.0.0.1'), false);
@@ -20,4 +21,14 @@ test('relay commands require a bounded bearer credential and cannot choose a tar
   assert.equal(parseRelayCommand(valid.replace('Bearer test-client-token', 'token-without-scheme')), null);
   assert.equal(parseRelayCommand(valid.replace('/api/v1/news?limit=1', 'https://evil.invalid/api/v1/news')), null);
   assert.equal(parseRelayCommand(valid.replace('"GET"', '"POST"')), null);
+});
+
+test('relay preserves a valid device bearer for Fastify to verify', () => {
+  const authorization = `Bearer trd_dev_${'A'.repeat(43)}`;
+  const command = parseRelayCommand(JSON.stringify({
+    id: 'device-request', method: 'GET', path: '/api/v1/news?limit=1', authorization,
+  }));
+  assert.deepEqual(command, {
+    id: 'device-request', method: 'GET', path: '/api/v1/news?limit=1', authorization,
+  });
 });

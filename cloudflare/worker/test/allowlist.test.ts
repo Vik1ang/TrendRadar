@@ -1,22 +1,71 @@
 import { describe, expect, it } from 'vitest';
-import { allowedReadPath, allowedReadQuery } from '../src/allowlist';
+import { allowedDeviceReadPath, allowedReadPath, allowedReadQuery, allowedReadRequest } from '../src/allowlist';
+import { clientReadAuthorizationAccepted, isDeviceBearerCandidate } from '../src/client-auth';
 import { RequestCorrelator } from '../src/correlator';
 import { nextRateBucket } from '../src/rate-limit';
 
+const deviceBearer = `Bearer trd_dev_${'A'.repeat(43)}`;
+
 describe('Relay route allowlist', () => {
+  it('keeps the Relay surface GET-only and limited to API v1', () => {
+    expect(allowedReadRequest('GET', '/api/v1/news')).toBe(true);
+    expect(allowedReadRequest('POST', '/api/v1/news')).toBe(false);
+    expect(allowedReadRequest('GET', '/api/v2/devices/pair')).toBe(false);
+  });
+
   it('accepts only client-facing read API resource paths', () => {
     expect(allowedReadPath('/api/v1/news')).toBe(true);
     expect(allowedReadPath('/api/v1/news/0f8fad5b-d9cb-469f-a165-70867728950e/analysis')).toBe(true);
     expect(allowedReadPath('/api/v1/internal/ingestion')).toBe(false);
+    expect(allowedReadPath('/api/v2/devices/pair')).toBe(false);
     expect(allowedReadPath('/api/v1/news/anything')).toBe(false);
     expect(allowedReadPath('/api/v1/news/0f8fad5b-d9cb-469f-a165-70867728950e/delete')).toBe(false);
     expect(allowedReadPath('/api/v1/health/../../internal')).toBe(false);
+  });
+
+  it('blocks unauthenticated health bypass while leaving device authorization to Fastify for status', () => {
+    expect(allowedDeviceReadPath('/api/v1/news')).toBe(true);
+    expect(allowedDeviceReadPath('/api/v1/categories')).toBe(true);
+    expect(allowedDeviceReadPath('/api/v1/health')).toBe(false);
+    expect(allowedDeviceReadPath('/api/v1/status')).toBe(true);
+    expect(allowedDeviceReadPath('/api/v1/internal/ingestion')).toBe(false);
   });
 
   it('rejects unsupported or duplicate query keys', () => {
     expect(allowedReadQuery(new URLSearchParams('q=DeepSeek&limit=10'))).toBe(true);
     expect(allowedReadQuery(new URLSearchParams('target=http://127.0.0.1'))).toBe(false);
     expect(allowedReadQuery(new URLSearchParams('limit=10&limit=20'))).toBe(false);
+  });
+});
+
+describe('client authorization compatibility', () => {
+  it('accepts a strict device bearer as a forwarding candidate', async () => {
+    expect(isDeviceBearerCandidate(deviceBearer)).toBe(true);
+    await expect(clientReadAuthorizationAccepted(deviceBearer, 'legacy-client-token')).resolves.toBe(true);
+  });
+
+  it('rejects malformed device bearer syntax instead of forwarding it', async () => {
+    const malformed = [
+      'Bearer trd_dev_short',
+      `Bearer trd_dev_${'A'.repeat(42)}`,
+      `Bearer trd_dev_${'A'.repeat(44)}`,
+      `Bearer trd_dev_${'A'.repeat(42)}+`,
+      `Bearer TRD_DEV_${'A'.repeat(43)}`,
+      `Bearer  trd_dev_${'A'.repeat(43)}`,
+      `Basic trd_dev_${'A'.repeat(43)}`,
+      `Bearer trd_dev_${'A'.repeat(43)} extra`,
+    ];
+    for (const authorization of malformed) {
+      expect(isDeviceBearerCandidate(authorization)).toBe(false);
+      await expect(clientReadAuthorizationAccepted(authorization, 'legacy-client-token')).resolves.toBe(false);
+    }
+    expect(isDeviceBearerCandidate(`bearer trd_dev_${'A'.repeat(43)}`)).toBe(true);
+  });
+
+  it('preserves the existing shared client token path', async () => {
+    await expect(clientReadAuthorizationAccepted('Bearer legacy-client-token', 'legacy-client-token')).resolves.toBe(true);
+    await expect(clientReadAuthorizationAccepted('legacy-client-token', 'legacy-client-token')).resolves.toBe(true);
+    await expect(clientReadAuthorizationAccepted('Bearer other-token', 'legacy-client-token')).resolves.toBe(false);
   });
 });
 
