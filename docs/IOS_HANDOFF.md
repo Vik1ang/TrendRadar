@@ -1,4 +1,6 @@
-# SwiftUI / iOS 交接（macOS 阶段；本轮未创建工程）
+# SwiftUI / iOS 交接（工程创建前的历史快照）
+
+> 本文记录的是 iOS 工程创建前的环境调查和部署草案，不代表当前客户端状态。当前 04A 验收、TLS 阻塞和 04B 真机状态以 [`IOS-MVP-04-VALIDATION.md`](IOS-MVP-04-VALIDATION.md) 为准；现有工程位于 `TrendRadar-iOS/`。
 
 ## 当前状态与双 Endpoint
 

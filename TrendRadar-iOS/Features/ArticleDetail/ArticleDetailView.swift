@@ -29,7 +29,14 @@ final class ArticleDetailModel {
 }
 
 struct ArticleDetailView: View {
+  @Environment(\.locale) private var locale
   @State private var model: ArticleDetailModel
+  private var dateLocale: Locale { NewsDateLocale.current(environmentLocale: locale) }
+
+  private func dateText(_ date: Date) -> String {
+    date.formatted(.dateTime.year().month().day().hour().minute().locale(dateLocale))
+  }
+
   init(articleID: String, api: any TrendRadarAPI) {
     _model = State(initialValue: ArticleDetailModel(id: articleID, api: api))
   }
@@ -50,13 +57,13 @@ struct ArticleDetailView: View {
               Text(article.source.name).font(.subheadline.weight(.medium))
                 .accessibilityIdentifier("detail-source")
               if let publishedAt = article.publishedAt {
-                Text("发布时间：\(publishedAt, format: .dateTime.year().month().day().hour().minute())")
+                Text(verbatim: "发布时间：\(dateText(publishedAt))")
+                  .accessibilityIdentifier("detail-published-at")
               } else {
                 Text("未提供发布时间").accessibilityIdentifier("detail-publication-unavailable")
               }
-              Text(
-                "采集时间：\(article.firstSeenAt, format: .dateTime.year().month().day().hour().minute())"
-              )
+              Text(verbatim: "采集时间：\(dateText(article.firstSeenAt))")
+                .accessibilityIdentifier("detail-first-seen-at")
             }.font(.caption).foregroundStyle(.secondary)
             if let summary = article.summary {
               Text(summary).font(.title3).fontWeight(.medium)

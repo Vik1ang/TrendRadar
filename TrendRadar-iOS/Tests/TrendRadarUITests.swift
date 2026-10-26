@@ -1,8 +1,8 @@
 import XCTest
+import UIKit
 
 final class TrendRadarUITests: XCTestCase {
   private static let stagingLANURL = "https://192.168.2.117:18443"
-  private static let stagingUnavailableLANURL = "https://192.168.2.117:18444"
   private static let stagingRelayURL =
     "https://trendradar-intelligence-relay-staging.vik1ang.workers.dev"
   override func setUpWithError() throws { continueAfterFailure = false }
@@ -40,6 +40,68 @@ final class TrendRadarUITests: XCTestCase {
     XCTAssertTrue(
       firstArticle.waitForExistence(timeout: 5), "Pull to refresh should keep the feed usable")
     attachScreenshot(of: app, named: "home")
+  }
+
+  @MainActor
+  func testFeedRestoresAfterBackgroundWithoutDuplicatingItems() throws {
+    let app = launch("standard")
+    let firstArticle = app.buttons["article-00000000-0000-0000-0000-000000000001"]
+    XCTAssertTrue(firstArticle.waitForExistence(timeout: 8))
+    let tabBar = app.tabBars.firstMatch
+    XCTAssertTrue(tabBar.exists)
+    XCTAssertLessThanOrEqual(tabBar.frame.maxY, app.frame.maxY)
+    XCTAssertTrue(app.tabBars.buttons["搜索"].isHittable)
+
+    XCUIDevice.shared.press(.home)
+    app.activate()
+    XCTAssertTrue(firstArticle.waitForExistence(timeout: 8))
+    XCTAssertEqual(
+      app.buttons.matching(identifier: "article-00000000-0000-0000-0000-000000000001").count,
+      1, "Returning from background must not duplicate feed rows")
+  }
+
+  @MainActor
+  func testChineseLocaleDatesAndNullableArticleFields() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--mock-scenario", "standard", "--enable-test-locale-injection",
+      "--test-locale", "zh_CN"]
+    app.launch()
+    let article = app.buttons["article-00000000-0000-0000-0000-000000000001"]
+    XCTAssertTrue(article.waitForExistence(timeout: 8))
+    XCTAssertTrue(app.tabBars.buttons["搜索"].isHittable)
+    XCTAssertTrue(app.buttons["channel-technology"].exists)
+    app.buttons["article-00000000-0000-0000-0000-000000000002"].tap()
+    XCTAssertTrue(app.staticTexts["detail-title"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["detail-publication-unavailable"].exists)
+    XCTAssertTrue(app.staticTexts["detail-summary-unavailable"].exists)
+    XCTAssertTrue(app.staticTexts["analysis-not-requested"].exists)
+    let collectionDate = app.staticTexts["detail-first-seen-at"].label
+    XCTAssertTrue(collectionDate.contains("月"), "Expected Chinese month marker in: \(collectionDate)")
+  }
+
+  @MainActor
+  func testTestOnlyPairingPasteKeepsSecretMasked() throws {
+    guard let path = ProcessInfo.processInfo.environment["IOS_AUTH_TEST_PAIRING_CODE_FILE"],
+      let code = try? String(contentsOfFile: path, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty else {
+      throw XCTSkip("Requires a protected local file path in the ephemeral test plan.")
+    }
+    let app = XCUIApplication()
+    app.launchArguments = ["--live-api", "--lan-base-url", "https://127.0.0.1:1"]
+    app.launch()
+    XCTAssertTrue(app.buttons["device-auth-button"].waitForExistence(timeout: 8))
+    app.buttons["device-auth-button"].tap()
+    let codeField = app.secureTextFields["pairing-code"]
+    XCTAssertTrue(codeField.waitForExistence(timeout: 5))
+    UIPasteboard.general.string = code
+    codeField.press(forDuration: 1.0)
+    let pasteItem = app.menuItems.firstMatch
+    XCTAssertTrue(pasteItem.waitForExistence(timeout: 5))
+    pasteItem.tap()
+    UIPasteboard.general.items = []
+    let pairButton = app.buttons["pair-device"]
+    XCTAssertTrue(pairButton.isEnabled)
+    XCTAssertFalse((codeField.value as? String ?? "").isEmpty)
   }
 
   @MainActor
@@ -147,6 +209,7 @@ final class TrendRadarUITests: XCTestCase {
 
   @MainActor
   func testStagingHostedRelayDirectRead() throws {
+    try requireStaging()
     let app = XCUIApplication()
     app.launchArguments = [
       "--live-api", "--lan-base-url", Self.stagingLANURL, "--relay-base-url", Self.stagingRelayURL,
@@ -167,10 +230,60 @@ final class TrendRadarUITests: XCTestCase {
   }
 
   @MainActor
-  func testStagingRevokedCredentialRequiresReauthentication() throws {
+  func testStagingPairingUsesSecurePasteWithoutTypingSecret() throws {
+    guard ProcessInfo.processInfo.environment["IOS_AUTH_STAGING_PAIRING_TEST"] == "1",
+      let path = ProcessInfo.processInfo.environment["IOS_AUTH_TEST_PAIRING_CODE_FILE"]
+    else {
+      throw XCTSkip("Requires a protected local file path in the ephemeral test plan.")
+    }
+    let code = try String(contentsOfFile: path, encoding: .utf8)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    XCTAssertFalse(code.isEmpty)
     let app = XCUIApplication()
     app.launchArguments = [
-      "--live-api", "--lan-base-url", Self.stagingUnavailableLANURL,
+      "--live-api", "--lan-base-url", Self.stagingLANURL,
+      "--relay-base-url", Self.stagingRelayURL,
+      "--relay-proxy-url", "http://127.0.0.1:10801",
+    ]
+    app.launch()
+    let pairingCode = app.secureTextFields["pairing-code"]
+    XCTAssertTrue(pairingCode.waitForExistence(timeout: 15))
+    UIPasteboard.general.string = code
+    pairingCode.press(forDuration: 1.0)
+    let pasteItem = app.menuItems.firstMatch
+    XCTAssertTrue(pasteItem.waitForExistence(timeout: 5))
+    pasteItem.tap()
+    UIPasteboard.general.items = []
+    let deviceName = app.textFields["device-name"]
+    XCTAssertTrue(deviceName.waitForExistence(timeout: 5))
+    deviceName.tap()
+    let nameLength = ((deviceName.value as? String) ?? "").count
+    if nameLength > 0 {
+      deviceName.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: nameLength))
+    }
+    deviceName.typeText("IOS-MVP-04 Simulator")
+    let pairButton = app.buttons["pair-device"]
+    XCTAssertTrue(pairButton.isEnabled)
+    pairButton.tap()
+    let fixture = app.buttons["article-b4e5510a-7cbd-480c-850e-1fe8e5cbb412"]
+    if !fixture.waitForExistence(timeout: 25) {
+      let visible = app.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | ")
+      XCTFail("Pairing completed without the expected Staging article; visible UI: \(visible)")
+    }
+    app.terminate()
+    app.launch()
+    XCTAssertTrue(fixture.waitForExistence(timeout: 20), "Keychain credential should survive relaunch")
+    fixture.tap()
+    XCTAssertTrue(app.staticTexts["detail-title"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["Staging device auth fixture"].exists)
+  }
+
+  @MainActor
+  func testStagingRevokedCredentialRequiresReauthentication() throws {
+    try requireStaging()
+    let app = XCUIApplication()
+    app.launchArguments = [
+      "--live-api", "--lan-base-url", Self.stagingLANURL,
       "--relay-base-url", Self.stagingRelayURL,
       "--relay-proxy-url", "http://127.0.0.1:10801",
     ]
@@ -189,9 +302,10 @@ final class TrendRadarUITests: XCTestCase {
 
   @MainActor
   func testStagingRelayOfflineShows503() throws {
+    try requireStaging()
     let app = XCUIApplication()
     app.launchArguments = [
-      "--live-api", "--lan-base-url", "https://192.168.2.117:18444",
+      "--live-api", "--lan-base-url", Self.stagingLANURL,
       "--relay-base-url", Self.stagingRelayURL, "--relay-proxy-url", "http://127.0.0.1:10801",
     ]
     app.launch()
@@ -200,17 +314,28 @@ final class TrendRadarUITests: XCTestCase {
   }
 
   @MainActor
-  func testStagingRelayScopeDenialShows403() throws {
-    guard ProcessInfo.processInfo.environment["IOS_AUTH_STAGING_EXPECT_SCOPE_DENIED"] == "1" else {
+  func testStagingScopeDenialShows403() throws {
+    guard ProcessInfo.processInfo.environment["IOS_AUTH_STAGING_ENABLED"] == "1",
+      ProcessInfo.processInfo.environment["IOS_AUTH_STAGING_EXPECT_SCOPE_DENIED"] == "1" else {
       throw XCTSkip("Run only with a read-only Staging device whose news:read scope was removed.")
     }
     let app = XCUIApplication()
     app.launchArguments = [
-      "--live-api", "--lan-base-url", "https://192.168.2.117:18444",
+      "--live-api", "--lan-base-url", Self.stagingLANURL,
       "--relay-base-url", Self.stagingRelayURL, "--relay-proxy-url", "http://127.0.0.1:10801",
     ]
     app.launch()
-    XCTAssertTrue(app.staticTexts["当前设备无权访问此内容。"].waitForExistence(timeout: 15))
+    let denied = app.staticTexts["当前设备无权访问此内容。"]
+    if !denied.waitForExistence(timeout: 15) {
+      let visible = app.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | ")
+      XCTFail("Staging scope-denial UI did not appear; visible: \(visible)")
+    }
+  }
+
+  private func requireStaging() throws {
+    guard ProcessInfo.processInfo.environment["IOS_AUTH_STAGING_ENABLED"] == "1" else {
+      throw XCTSkip("Staging network tests are opt-in; no staging credential is configured.")
+    }
   }
 
   @MainActor

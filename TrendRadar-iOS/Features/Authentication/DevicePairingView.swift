@@ -20,7 +20,10 @@ final class DeviceAuthModel {
   var pairingCode = ""
   var deviceName = "TrendRadar iPhone"
 
-  init(baseURL: URL?, credentials: any DeviceCredentialStoring, requiresReauthentication: Bool = false) {
+  init(
+    baseURL: URL?, credentials: any DeviceCredentialStoring,
+    requiresReauthentication: Bool = false
+  ) {
     self.credentials = credentials
     pairingClient = baseURL.map { DevicePairingClient(baseURL: $0) }
     self.requiresReauthentication = requiresReauthentication

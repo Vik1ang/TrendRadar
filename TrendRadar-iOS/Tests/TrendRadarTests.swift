@@ -36,6 +36,18 @@ final class TrendRadarTests: XCTestCase {
   }
 
   @MainActor
+  func testConcurrentFeedLoadDoesNotDuplicateInitialRequests() async throws {
+    let api = MockTrendRadarAPI()
+    let model = NewsFeedModel(api: api)
+    async let first: Void = model.load()
+    async let second: Void = model.load()
+    _ = await (first, second)
+    let requestCount = await api.newsCount()
+    XCTAssertEqual(requestCount, 1)
+    XCTAssertEqual(model.articles.count, 11)
+  }
+
+  @MainActor
   func testLateSearchResponseCannotReplaceNewerQuery() async throws {
     let api = MockTrendRadarAPI(scenario: .staleSearch)
     let model = SearchModel(api: api)

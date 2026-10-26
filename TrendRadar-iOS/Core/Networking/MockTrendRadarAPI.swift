@@ -21,6 +21,7 @@ enum MockScenario: String {
 actor MockTrendRadarAPI: TrendRadarAPI {
   private let calendar = Calendar(identifier: .gregorian)
   private(set) var searchRequestCount = 0
+  private(set) var newsRequestCount = 0
   private var detailFailuresRemaining: Int
   let scenario: MockScenario
 
@@ -83,6 +84,7 @@ actor MockTrendRadarAPI: TrendRadarAPI {
   }
 
   func news(_ query: NewsQuery) async throws -> NewsPage {
+    newsRequestCount += 1
     if scenario == .feedError {
       throw APIClientError.serviceUnavailable(message: nil, requestID: nil)
     }
@@ -126,6 +128,7 @@ actor MockTrendRadarAPI: TrendRadarAPI {
   }
 
   func searchCount() -> Int { searchRequestCount }
+  func newsCount() -> Int { newsRequestCount }
 
   private func page(_ query: NewsQuery) -> NewsPage {
     let filtered = allArticles.filter { article in

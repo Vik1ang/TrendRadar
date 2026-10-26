@@ -17,6 +17,7 @@ final class NewsFeedModel {
   init(api: any TrendRadarAPI) { self.api = api }
 
   func load() async {
+    guard !isLoading, !isRefreshing else { return }
     guard categories.isEmpty else {
       await refresh()
       return
@@ -34,7 +35,7 @@ final class NewsFeedModel {
   }
 
   func select(_ category: String?) async {
-    guard selectedCategory != category else { return }
+    guard selectedCategory != category, !isLoading, !isRefreshing else { return }
     selectedCategory = category
     isLoading = true
     error = nil
@@ -43,6 +44,7 @@ final class NewsFeedModel {
   }
 
   func refresh() async {
+    guard !isLoading, !isRefreshing else { return }
     isRefreshing = true
     error = nil
     do { try await fetch(reset: true) } catch { self.error = error.localizedDescription }
@@ -67,8 +69,10 @@ final class NewsFeedModel {
 }
 
 struct NewsFeedView: View {
+  @Environment(\.scenePhase) private var scenePhase
   @State private var model: NewsFeedModel
   @State private var selectedArticle: NewsArticle?
+  @State private var enteredBackground = false
   @Binding private var deviceAuthPresentation: DeviceAuthPresentation?
 
   init(
@@ -126,6 +130,14 @@ struct NewsFeedView: View {
         ArticleDetailView(articleID: article.id, api: model.api)
       }
       .task { await model.load() }
+      .onChange(of: scenePhase) { _, phase in
+        if phase == .background {
+          enteredBackground = true
+        } else if phase == .active, enteredBackground {
+          enteredBackground = false
+          Task { await model.load() }
+        }
+      }
       .onReceive(
         NotificationCenter.default.publisher(for: .deviceAuthenticationRestored)
           .receive(on: DispatchQueue.main)
