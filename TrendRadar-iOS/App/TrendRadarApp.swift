@@ -59,8 +59,7 @@ struct RootTabView: View {
   let api: any TrendRadarAPI
   let pairingBaseURL: URL?
   let credentials: any DeviceCredentialStoring
-  @State private var isShowingDeviceAuth = false
-  @State private var requiresReauthentication = false
+  @State private var deviceAuthPresentation: DeviceAuthPresentation?
 
   init(
     api: any TrendRadarAPI,
@@ -74,32 +73,29 @@ struct RootTabView: View {
 
   var body: some View {
     TabView {
-      NewsFeedView(api: api).tabItem { Label("新闻", systemImage: "newspaper") }
+      NewsFeedView(api: api, deviceAuthPresentation: $deviceAuthPresentation)
+        .tabItem { Label("新闻", systemImage: "newspaper") }
       SearchView(api: api).tabItem { Label("搜索", systemImage: "magnifyingglass") }
     }
     .tint(.primary)
-    .toolbar {
-      ToolbarItem(placement: .topBarTrailing) {
-        Button {
-          isShowingDeviceAuth = true
-        } label: {
-          Label("设备认证", systemImage: "person.badge.key")
-        }
-        .accessibilityIdentifier("device-auth-button")
-      }
-    }
-    .sheet(isPresented: $isShowingDeviceAuth) {
+    .sheet(item: $deviceAuthPresentation) { presentation in
       DevicePairingView(
         baseURL: pairingBaseURL,
         credentials: credentials,
-        requiresReauthentication: requiresReauthentication)
+        requiresReauthentication: presentation == .reauthentication)
     }
-    .onReceive(NotificationCenter.default.publisher(for: .deviceReauthenticationRequired)) { _ in
-      requiresReauthentication = true
-      isShowingDeviceAuth = true
-    }
-    .onReceive(NotificationCenter.default.publisher(for: .deviceAuthenticationRestored)) { _ in
-      requiresReauthentication = false
+    .onReceive(
+      NotificationCenter.default.publisher(for: .deviceReauthenticationRequired)
+        .receive(on: DispatchQueue.main)
+    ) { _ in
+      deviceAuthPresentation = .reauthentication
     }
   }
+}
+
+enum DeviceAuthPresentation: String, Identifiable {
+  case manual
+  case reauthentication
+
+  var id: String { rawValue }
 }

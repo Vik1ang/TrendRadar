@@ -29,7 +29,7 @@ final class DeviceAuthModel {
   func load() async {
     do {
       guard let credential = try await credentials.credential() else {
-        state = .missing
+        state = requiresReauthentication ? .reauthenticationRequired : .missing
         return
       }
       if credential.expiresAt <= Date() {
@@ -89,6 +89,8 @@ final class DeviceAuthModel {
 }
 
 struct DevicePairingView: View {
+  @Environment(\.dismiss) private var dismiss
+  private let requiresReauthentication: Bool
   @State private var model: DeviceAuthModel
 
   init(
@@ -96,6 +98,7 @@ struct DevicePairingView: View {
     credentials: any DeviceCredentialStoring = KeychainDeviceCredentials(),
     requiresReauthentication: Bool = false
   ) {
+    self.requiresReauthentication = requiresReauthentication
     _model = State(initialValue: DeviceAuthModel(
       baseURL: baseURL, credentials: credentials,
       requiresReauthentication: requiresReauthentication))
@@ -109,7 +112,19 @@ struct DevicePairingView: View {
       }
       .navigationTitle("设备认证")
       .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("完成") { dismiss() }
+            .accessibilityIdentifier("auth-dismiss")
+        }
+      }
       .task { await model.load() }
+      .onReceive(
+        NotificationCenter.default.publisher(for: .deviceReauthenticationRequired)
+          .receive(on: DispatchQueue.main)
+      ) { _ in
+        model.markReauthenticationRequired()
+      }
     }
   }
 

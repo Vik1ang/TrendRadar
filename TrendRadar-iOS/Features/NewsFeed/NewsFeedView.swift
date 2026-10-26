@@ -69,7 +69,15 @@ final class NewsFeedModel {
 struct NewsFeedView: View {
   @State private var model: NewsFeedModel
   @State private var selectedArticle: NewsArticle?
-  init(api: any TrendRadarAPI) { _model = State(initialValue: NewsFeedModel(api: api)) }
+  @Binding private var deviceAuthPresentation: DeviceAuthPresentation?
+
+  init(
+    api: any TrendRadarAPI,
+    deviceAuthPresentation: Binding<DeviceAuthPresentation?> = .constant(nil)
+  ) {
+    _model = State(initialValue: NewsFeedModel(api: api))
+    _deviceAuthPresentation = deviceAuthPresentation
+  }
 
   var body: some View {
     NavigationStack {
@@ -102,6 +110,14 @@ struct NewsFeedView: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
+          Button {
+            deviceAuthPresentation = .manual
+          } label: {
+            Label("设备认证", systemImage: "person.badge.key")
+          }
+          .accessibilityIdentifier("device-auth-button")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
           Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.secondary)
         }
       }
@@ -110,6 +126,10 @@ struct NewsFeedView: View {
         ArticleDetailView(articleID: article.id, api: model.api)
       }
       .task { await model.load() }
+      .onReceive(
+        NotificationCenter.default.publisher(for: .deviceAuthenticationRestored)
+          .receive(on: DispatchQueue.main)
+      ) { _ in Task { await model.load() } }
     }
   }
 
