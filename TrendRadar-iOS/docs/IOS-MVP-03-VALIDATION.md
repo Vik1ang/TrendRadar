@@ -19,7 +19,7 @@ Device: iPhone 17 Simulator, iOS 27.0.
 - LAN feed, all four channel controls, search, detail and `not_requested` analysis UI succeeded against the Staging fixture. The fixture has a null publication time, null summary, and no categories.
 - **A — forced Relay:** passed using the hosted Worker URL and the same Keychain device credential; fixture list/detail displayed the same Article ID and title as LAN.
 - **B — automatic failover:** passed with the LAN endpoint deliberately made unreachable. The client timed out on LAN and loaded the fixture through the hosted Staging Relay; detail opened. Restoring the LAN endpoint made the client select LAN again.
-- Server-side revocation of all three active Simulator test devices was performed. The retained Simulator credential then received 401 and the App presented the re-pair UI.
+- Server-side revocation of all three active Simulator test devices was performed. The retained Simulator credential then received 401 and the App presented the re-pair UI. The user-visible “delete local credential” action removed that revoked credential from Simulator Keychain after the screenshot.
 - Relay Agent offline: Staging Worker health returned HTTP 503 / `relay=offline`; UI showed “Relay agent is not connected”. Restarting the Agent restored WSS registration and Worker health HTTP 200 / `relay=connected`.
 - **C — actual network change:** not tested. CoreSimulator shares the Mac host network; this does not establish Wi-Fi-to-cellular behavior on a physical iPhone.
 - HTTPS reads and pairing passed without ATS exceptions or certificate bypass. LAN HTTPS used the existing Simulator-trusted staging certificate; Relay used normal public TLS validation.

@@ -183,6 +183,8 @@ final class TrendRadarUITests: XCTestCase {
     XCTAssertTrue(statuses.contains("reauth"), "Visible device authentication states: \(statuses)")
     XCTAssertTrue(app.buttons["pair-device"].exists)
     attachScreenshot(of: app, named: "ios-mvp-03-auth-reauth")
+    app.buttons["auth-logout"].tap()
+    XCTAssertTrue(app.descendants(matching: .any)["auth-status-missing"].waitForExistence(timeout: 5))
   }
 
   @MainActor

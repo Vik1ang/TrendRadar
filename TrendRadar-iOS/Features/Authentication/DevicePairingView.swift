@@ -69,6 +69,7 @@ final class DeviceAuthModel {
   func logout() async {
     do {
       try await credentials.revoke()
+      requiresReauthentication = false
       state = .missing
     } catch {
       state = .error(error.localizedDescription)
@@ -145,6 +146,10 @@ struct DevicePairingView: View {
         Label("认证失效，需要重新配对", systemImage: "lock.trianglebadge.exclamationmark")
           .foregroundStyle(.orange)
           .accessibilityIdentifier("auth-status-reauth")
+        Button("删除本机凭据", role: .destructive) {
+          Task { await model.logout() }
+        }
+        .accessibilityIdentifier("auth-logout")
       case .pairing:
         ProgressView("正在配对…")
       case .error(let message):
