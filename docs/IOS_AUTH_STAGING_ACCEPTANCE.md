@@ -1,4 +1,4 @@
-# IOS-AUTH-STAGING-01 — staging acceptance record
+# IOS-AUTH-STAGING-01 — staging acceptance record (superseded by IOS-AUTH-STAGING-02)
 
 Date: 2026-10-26
 Branch: `staging/ios-auth-01`
@@ -151,3 +151,8 @@ the staging Compose project name and inspect its resources first; do not remove 
 existing `trendradar-lan-acceptance` project or production resources. This task
 stops at Staging; production migration, service deployment, credential issuance,
 and Worker changes remain unauthorized and unperformed.
+
+
+## Follow-up
+
+Simulator pairing, Keychain persistence and local Wrangler/DO Relay E2E have since been verified. See [`IOS_AUTH_STAGING_02.md`](IOS_AUTH_STAGING_02.md). The follow-up remains local-only: no Cloudflare-hosted Worker/DO was provisioned and physical iPhone public-certificate acceptance is pending.

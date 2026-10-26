@@ -24,7 +24,7 @@ services:
       API_PORT: 3001
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       API_READ_TOKEN: ${STAGING_API_READ_TOKEN:?}
-      API_TRUSTED_PROXY_IPS: 172.29.80.2
+      API_TRUSTED_PROXY_IPS: 172.29.80.4
     ports:
       - "127.0.0.1:13101:3001"
     depends_on:
@@ -49,6 +49,38 @@ services:
       postgres: { condition: service_healthy }
     networks: [db]
     restart: unless-stopped
+  relay-worker:
+    build:
+      context: ./cloudflare/worker
+      dockerfile: Dockerfile.staging
+    working_dir: /app
+    environment:
+      WRANGLER_SEND_METRICS: "false"
+    volumes:
+      - ${STAGING_RELAY_STATE_DIR:?}:/data
+      - ${STAGING_RELAY_VARS_FILE:?}:/app/.dev.vars:ro
+    networks: [edge]
+    restart: unless-stopped
+  relay-agent:
+    build: ./relay-agent
+    environment:
+      RELAY_WORKER_URL: https://ios-auth-staging-gateway
+      RELAY_AGENT_TOKEN: ${STAGING_RELAY_AGENT_TOKEN:?}
+      LOCAL_API_ORIGIN: http://api:3001
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/trendradar-staging-root.crt
+    volumes:
+      - ${STAGING_TLS_DIR:?}/root-ca.crt:/etc/ssl/certs/trendradar-staging-root.crt:ro
+    depends_on:
+      api: { condition: service_started }
+      relay-worker: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9900/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks: [edge]
+    restart: unless-stopped
   https-gateway:
     image: nginx:1.28-alpine
     ports:
@@ -57,10 +89,11 @@ services:
       - ./deploy/ios-auth-staging/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ${STAGING_TLS_DIR:?}/server.crt:/etc/nginx/tls/server.crt:ro
       - ${STAGING_TLS_DIR:?}/server.key:/etc/nginx/tls/server.key:ro
-    depends_on: [api]
+    depends_on: [api, relay-worker]
     networks:
       edge:
-        ipv4_address: 172.29.80.2
+        ipv4_address: 172.29.80.4
+        aliases: [ios-auth-staging-gateway]
     restart: unless-stopped
 volumes:
   auth-staging-postgres:

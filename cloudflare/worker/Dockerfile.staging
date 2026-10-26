@@ -1,0 +1,10 @@
+FROM node:22-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --silent
+COPY src ./src
+COPY wrangler.jsonc ./wrangler.jsonc
+CMD ["./node_modules/.bin/wrangler", "dev", "--ip", "0.0.0.0", "--port", "8787", "--local", "--persist-to", "/data", "--name", "trendradar-ios-auth-staging-relay"]
