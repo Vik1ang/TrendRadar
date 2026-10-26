@@ -13,11 +13,20 @@ struct TrendRadarApp: App {
     pairingBaseURL = configuration.lanBaseURL
     let scenario = MockScenario.launchArguments(ProcessInfo.processInfo.arguments)
     if configuration.isLive, let lanBaseURL = configuration.lanBaseURL {
-      let lan = HTTPTrendRadarAPI(baseURL: lanBaseURL, credentials: keychain)
-      let relay = configuration.relayBaseURL.flatMap { relayBaseURL -> HTTPTrendRadarAPI? in
-        HTTPTrendRadarAPI(baseURL: relayBaseURL, credentials: keychain)
+      if configuration.forceRelay, let relayBaseURL = configuration.relayBaseURL {
+        api = HTTPTrendRadarAPI(
+          baseURL: relayBaseURL, credentials: keychain, requestTimeout: 20,
+          proxyURL: configuration.relayProxyURL)
+      } else {
+        let lan = HTTPTrendRadarAPI(
+          baseURL: lanBaseURL, credentials: keychain, requestTimeout: 5)
+        let relay = configuration.relayBaseURL.flatMap { relayBaseURL -> HTTPTrendRadarAPI? in
+          HTTPTrendRadarAPI(
+            baseURL: relayBaseURL, credentials: keychain, requestTimeout: 20,
+            proxyURL: configuration.relayProxyURL)
+        }
+        api = RoutedTrendRadarAPI(lan: lan, relay: relay)
       }
-      api = RoutedTrendRadarAPI(lan: lan, relay: relay)
     } else {
       api = MockTrendRadarAPI(scenario: scenario)
     }
@@ -34,6 +43,8 @@ struct APIConfiguration: Equatable {
   let isLive: Bool
   let lanBaseURL: URL?
   let relayBaseURL: URL?
+  let relayProxyURL: URL?
+  let forceRelay: Bool
 
   static func from(_ arguments: [String]) -> APIConfiguration {
     guard arguments.contains("--live-api"),
@@ -41,11 +52,19 @@ struct APIConfiguration: Equatable {
       let lanURL = URL(string: lan),
       lanURL.scheme?.lowercased() == "https"
     else {
-      return APIConfiguration(isLive: false, lanBaseURL: nil, relayBaseURL: nil)
+      return APIConfiguration(
+        isLive: false, lanBaseURL: nil, relayBaseURL: nil, relayProxyURL: nil, forceRelay: false)
     }
     let relayURL = value(after: "--relay-base-url", in: arguments).flatMap(URL.init)
     let safeRelay = relayURL?.scheme?.lowercased() == "https" ? relayURL : nil
-    return APIConfiguration(isLive: true, lanBaseURL: lanURL, relayBaseURL: safeRelay)
+    let proxyURL = value(after: "--relay-proxy-url", in: arguments).flatMap(URL.init)
+    let safeProxy = proxyURL.flatMap { proxy in
+      proxy.scheme?.lowercased() == "http" && proxy.host != nil && proxy.user == nil
+        && proxy.password == nil ? proxy : nil
+    }
+    return APIConfiguration(
+      isLive: true, lanBaseURL: lanURL, relayBaseURL: safeRelay,
+      relayProxyURL: safeProxy, forceRelay: arguments.contains("--force-relay") && safeRelay != nil)
   }
 
   private static func value(after flag: String, in arguments: [String]) -> String? {

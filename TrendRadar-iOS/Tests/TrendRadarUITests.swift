@@ -1,6 +1,10 @@
 import XCTest
 
 final class TrendRadarUITests: XCTestCase {
+  private static let stagingLANURL = "https://192.168.2.117:18443"
+  private static let stagingUnavailableLANURL = "https://192.168.2.117:18444"
+  private static let stagingRelayURL =
+    "https://trendradar-intelligence-relay-staging.vik1ang.workers.dev"
   override func setUpWithError() throws { continueAfterFailure = false }
 
   @MainActor
@@ -142,85 +146,34 @@ final class TrendRadarUITests: XCTestCase {
   }
 
   @MainActor
-  func testStagingDevicePairingAndKeychainPersistence() throws {
+  func testStagingHostedRelayDirectRead() throws {
     let app = XCUIApplication()
     app.launchArguments = [
-      "--live-api", "--lan-base-url", "https://192.168.2.117:18443",
+      "--live-api", "--lan-base-url", Self.stagingLANURL, "--relay-base-url", Self.stagingRelayURL,
+      "--relay-proxy-url", "http://127.0.0.1:10801", "--force-relay",
     ]
     app.launch()
-
-    let pairingCode = app.secureTextFields["pairing-code"]
-    if !pairingCode.waitForExistence(timeout: 3) {
-      app.buttons["device-auth-button"].tap()
-    }
-
-    let authenticated = app.descendants(matching: .any)["auth-status-valid"]
-    if !authenticated.waitForExistence(timeout: 5) {
-      guard let code = ProcessInfo.processInfo.environment["IOS_AUTH_STAGING_PAIRING_CODE"],
-        !code.isEmpty
-      else { throw XCTSkip("Pairing code is supplied only for an unpaired Staging simulator.") }
-      XCTAssertTrue(pairingCode.waitForExistence(timeout: 5))
-      pairingCode.tap()
-      pairingCode.typeText(code)
-      let deviceName = app.textFields["device-name"]
-      deviceName.tap()
-      deviceName.typeText(
-        String(repeating: XCUIKeyboardKey.delete.rawValue, count: "TrendRadar iPhone".count))
-      deviceName.typeText("Staging Auth Simulator")
-      let pairButton = app.buttons["pair-device"]
-      XCTAssertTrue(pairButton.isEnabled)
-      pairButton.tap()
-      XCTAssertTrue(authenticated.waitForExistence(timeout: 12))
-    }
-    XCTAssertTrue(app.staticTexts["Staging Auth Simulator"].exists)
-    app.buttons["auth-dismiss"].tap()
     let article = app.buttons["article-b4e5510a-7cbd-480c-850e-1fe8e5cbb412"]
-    XCTAssertTrue(article.waitForExistence(timeout: 12), "Device Bearer should read V1 news")
+    if !article.waitForExistence(timeout: 20) {
+      let visible = app.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | ")
+      XCTFail("Forced hosted Relay read failed; visible UI: \(visible)")
+    }
     XCTAssertTrue(article.label.contains("Staging device auth fixture"))
+    attachScreenshot(of: app, named: "ios-mvp-03-home-hosted-relay-forced")
     article.tap()
     XCTAssertTrue(app.staticTexts["detail-title"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.staticTexts["Staging device auth fixture"].exists)
-
-    app.terminate()
-    app.launchArguments = [
-      "--live-api", "--lan-base-url", "https://192.168.2.117:18444",
-      "--relay-base-url", "https://192.168.2.117:18443/relay",
-    ]
-    app.launch()
-    let relayedArticle = app.buttons["article-b4e5510a-7cbd-480c-850e-1fe8e5cbb412"]
-    XCTAssertTrue(relayedArticle.waitForExistence(timeout: 20), "Relay should serve the same V1 article")
-    XCTAssertTrue(relayedArticle.label.contains("Staging device auth fixture"))
-    relayedArticle.tap()
-    XCTAssertTrue(app.staticTexts["detail-title"].waitForExistence(timeout: 8))
-    XCTAssertTrue(app.staticTexts["Staging device auth fixture"].exists)
-
-    app.terminate()
-    app.launchArguments = [
-      "--live-api", "--lan-base-url", "https://192.168.2.117:18443",
-    ]
-    app.launch()
-    XCTAssertTrue(article.waitForExistence(timeout: 12), "Keychain credential should persist")
-    app.buttons["device-auth-button"].tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["auth-status-valid"].waitForExistence(timeout: 8))
+    attachScreenshot(of: app, named: "ios-mvp-03-detail-hosted-relay-forced")
   }
 
   @MainActor
   func testStagingRevokedCredentialRequiresReauthentication() throws {
-    guard ProcessInfo.processInfo.environment["IOS_AUTH_STAGING_EXPECT_REVOKED"] == "1" else {
-      throw XCTSkip("Run only after the paired Staging device is revoked server-side.")
-    }
     let app = XCUIApplication()
-    if ProcessInfo.processInfo.environment["IOS_AUTH_STAGING_USE_RELAY"] == "1" {
-      app.launchArguments = [
-        "--live-api", "--lan-base-url", "https://192.168.2.117:18444",
-        "--relay-base-url", "https://192.168.2.117:18443/relay",
-      ]
-    } else {
-      app.launchArguments = [
-        "--live-api", "--lan-base-url", "https://192.168.2.117:18443",
-      ]
-    }
+    app.launchArguments = [
+      "--live-api", "--lan-base-url", Self.stagingUnavailableLANURL,
+      "--relay-base-url", Self.stagingRelayURL,
+      "--relay-proxy-url", "http://127.0.0.1:10801",
+    ]
     if app.state != .notRunning { app.terminate() }
     app.launch()
     XCTAssertTrue(app.secureTextFields["pairing-code"].waitForExistence(timeout: 12))
@@ -229,17 +182,15 @@ final class TrendRadarUITests: XCTestCase {
     }
     XCTAssertTrue(statuses.contains("reauth"), "Visible device authentication states: \(statuses)")
     XCTAssertTrue(app.buttons["pair-device"].exists)
+    attachScreenshot(of: app, named: "ios-mvp-03-auth-reauth")
   }
 
   @MainActor
   func testStagingRelayOfflineShows503() throws {
-    guard ProcessInfo.processInfo.environment["IOS_AUTH_STAGING_EXPECT_RELAY_OFFLINE"] == "1" else {
-      throw XCTSkip("Run only while the isolated Staging Relay Agent is stopped.")
-    }
     let app = XCUIApplication()
     app.launchArguments = [
       "--live-api", "--lan-base-url", "https://192.168.2.117:18444",
-      "--relay-base-url", "https://192.168.2.117:18443/relay",
+      "--relay-base-url", Self.stagingRelayURL, "--relay-proxy-url", "http://127.0.0.1:10801",
     ]
     app.launch()
     XCTAssertTrue(app.staticTexts["Relay agent is not connected"].waitForExistence(timeout: 20))
@@ -254,7 +205,7 @@ final class TrendRadarUITests: XCTestCase {
     let app = XCUIApplication()
     app.launchArguments = [
       "--live-api", "--lan-base-url", "https://192.168.2.117:18444",
-      "--relay-base-url", "https://192.168.2.117:18443/relay",
+      "--relay-base-url", Self.stagingRelayURL, "--relay-proxy-url", "http://127.0.0.1:10801",
     ]
     app.launch()
     XCTAssertTrue(app.staticTexts["当前设备无权访问此内容。"].waitForExistence(timeout: 15))

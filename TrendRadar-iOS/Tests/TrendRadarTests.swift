@@ -316,6 +316,52 @@ final class TrendRadarTests: XCTestCase {
     } catch {}
   }
 
+  func testHTTPTimeoutFallsBackToRelay() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [StubURLProtocol.self]
+    configuration.timeoutIntervalForRequest = 0.1
+    StubURLProtocol.statusCode = 200
+    StubURLProtocol.responseData = Data(Self.categoryJSON.utf8)
+    StubURLProtocol.delay = 1
+    defer { StubURLProtocol.delay = 0 }
+    let lan = HTTPTrendRadarAPI(
+      baseURL: URL(string: "https://lan.test")!, credentials: TestCredentials(),
+      session: URLSession(configuration: configuration))
+    let relay = EndpointProbe(.success("relay"))
+    let result = try await RoutedTrendRadarAPI(lan: lan, relay: relay).categories()
+    XCTAssertEqual(result.first?.id, "relay")
+    let relayCount = await relay.count()
+    XCTAssertEqual(relayCount, 1)
+  }
+
+  func testStagingRelayProxyUsesHTTPConnectWithoutDirectFailover() {
+    let client = HTTPTrendRadarAPI(
+      baseURL: URL(string: "https://relay.example")!, credentials: TestCredentials(),
+      requestTimeout: 20, proxyURL: URL(string: "http://127.0.0.1:10801")!)
+    XCTAssertEqual(client.session.configuration.proxyConfigurations.count, 1)
+    XCTAssertFalse(client.session.configuration.proxyConfigurations[0].allowFailover)
+
+    let directClient = HTTPTrendRadarAPI(
+      baseURL: URL(string: "https://lan.example")!, credentials: TestCredentials(),
+      requestTimeout: 5)
+    XCTAssertTrue(directClient.session.configuration.proxyConfigurations.isEmpty)
+  }
+
+  func testAPIConfigurationKeepsStagingProxyAndForceRelayOptIn() {
+    let mock = APIConfiguration.from([])
+    XCTAssertFalse(mock.isLive)
+    XCTAssertFalse(mock.forceRelay)
+
+    let staging = APIConfiguration.from([
+      "--live-api", "--lan-base-url", "https://lan.example",
+      "--relay-base-url", "https://relay.example", "--relay-proxy-url",
+      "http://127.0.0.1:10801", "--force-relay",
+    ])
+    XCTAssertTrue(staging.isLive)
+    XCTAssertTrue(staging.forceRelay)
+    XCTAssertEqual(staging.relayProxyURL?.host, "127.0.0.1")
+  }
+
   func testRoutedClientPrefersLANAndFallsBackOnlyOnReachability() async throws {
     let lan = EndpointProbe(.success("lan"))
     let relay = EndpointProbe(.success("relay"))

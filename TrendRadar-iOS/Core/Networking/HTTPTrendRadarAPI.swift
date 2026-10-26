@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 /// Authenticated V1 client. Callers provide verified HTTPS base URLs and future device credentials.
 /// Never retries over an alternate/insecure scheme after TLS or authorization failures.
@@ -6,14 +7,48 @@ struct HTTPTrendRadarAPI: TrendRadarAPI {
   let baseURL: URL
   let credentials: any DeviceCredentialProviding
   let session: URLSession
+  private let invalidProxyConfiguration: Bool
 
   init(
     baseURL: URL, credentials: any DeviceCredentialProviding = KeychainDeviceCredentials(),
-    session: URLSession = .shared
+    session: URLSession? = nil, requestTimeout: TimeInterval? = nil, proxyURL: URL? = nil
   ) {
     self.baseURL = baseURL
     self.credentials = credentials
-    self.session = session
+    if let session {
+      self.session = session
+      invalidProxyConfiguration = false
+    } else if requestTimeout != nil || proxyURL != nil {
+      let configuration = URLSessionConfiguration.ephemeral
+      if let requestTimeout {
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = requestTimeout * 2
+      }
+      if let proxyURL {
+        if let proxy = Self.httpConnectProxy(from: proxyURL) {
+          configuration.proxyConfigurations = [proxy]
+          invalidProxyConfiguration = false
+        } else {
+          invalidProxyConfiguration = true
+        }
+      } else {
+        invalidProxyConfiguration = false
+      }
+      self.session = URLSession(configuration: configuration)
+    } else {
+      self.session = .shared
+      invalidProxyConfiguration = false
+    }
+  }
+
+  private static func httpConnectProxy(from url: URL) -> ProxyConfiguration? {
+    guard url.scheme?.lowercased() == "http", let host = url.host,
+      let rawPort = url.port, let port = NWEndpoint.Port(rawValue: UInt16(rawPort))
+    else { return nil }
+    var proxy = ProxyConfiguration(
+      httpCONNECTProxy: .hostPort(host: NWEndpoint.Host(host), port: port))
+    proxy.allowFailover = false
+    return proxy
   }
 
   func categories() async throws -> [NewsCategory] { try await get("/categories") }
@@ -38,7 +73,8 @@ struct HTTPTrendRadarAPI: TrendRadarAPI {
   }
 
   private func get<T: Decodable>(_ path: String, query: [(String, String)] = []) async throws -> T {
-    guard baseURL.scheme?.lowercased() == "https" else { throw APIClientError.invalidResponse }
+    guard baseURL.scheme?.lowercased() == "https", !invalidProxyConfiguration
+    else { throw APIClientError.invalidResponse }
     var components = URLComponents(
       url: baseURL.appending(path: "/api/v1\(path)"), resolvingAgainstBaseURL: false)
     if !query.isEmpty { components?.queryItems = query.map(URLQueryItem.init(name:value:)) }
