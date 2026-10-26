@@ -1,0 +1,75 @@
+name: trendradar-ios-auth-staging
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    volumes:
+      - auth-staging-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [db]
+    restart: unless-stopped
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.ios-auth-staging
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 3001
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      API_READ_TOKEN: ${STAGING_API_READ_TOKEN:?}
+      API_TRUSTED_PROXY_IPS: 172.29.80.2
+    ports:
+      - "127.0.0.1:13101:3001"
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks:
+      db: {}
+      edge:
+        ipv4_address: 172.29.80.3
+    restart: unless-stopped
+  ingest-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.ios-auth-staging
+    command: ["node", "dist/src/ingestion-server.js"]
+    environment:
+      INGEST_HOST: 0.0.0.0
+      INGEST_PORT: 3002
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      INGEST_TOKEN: ${STAGING_INGEST_TOKEN:?}
+      INTELLIGENCE_MAX_ANALYSES_PER_DAY: "0"
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [db]
+    restart: unless-stopped
+  https-gateway:
+    image: nginx:1.28-alpine
+    ports:
+      - "192.168.2.117:18443:443"
+    volumes:
+      - ./deploy/ios-auth-staging/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${STAGING_TLS_DIR:?}/server.crt:/etc/nginx/tls/server.crt:ro
+      - ${STAGING_TLS_DIR:?}/server.key:/etc/nginx/tls/server.key:ro
+    depends_on: [api]
+    networks:
+      edge:
+        ipv4_address: 172.29.80.2
+    restart: unless-stopped
+volumes:
+  auth-staging-postgres:
+    name: trendradar-ios-auth-staging-postgres
+networks:
+  db:
+    name: trendradar-ios-auth-staging-db
+    internal: true
+  edge:
+    name: trendradar-ios-auth-staging-edge
+    ipam:
+      config: [{ subnet: 172.29.80.0/24 }]
